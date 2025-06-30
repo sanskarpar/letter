@@ -162,6 +162,7 @@ export default function DashboardPage() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <span className="text-lg text-gray-600">Loading...</span>
+        <span className="text-lg text-gray-600">Please wait</span>
       </div>
     );
   }
