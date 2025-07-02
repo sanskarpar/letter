@@ -65,6 +65,7 @@ export async function POST(request: NextRequest) {
           sessionId: session.id,
           customerId: session.customer,
           metadata: session.metadata,
+          mode: session.mode,
         });
 
         const userId = session.metadata?.userId;
@@ -74,9 +75,8 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: "No userId in metadata" }, { status: 400 });
         }
 
-        // Get the subscription or line items to determine what was purchased
+        // Handle subscription purchase
         if (session.mode === "subscription") {
-          // Handle subscription purchase
           await handleSubscriptionPurchase(session, userId);
         } else if (session.mode === "payment") {
           // Handle one-time credit purchase
@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
         });
 
         // Handle recurring subscription payments
-        const subscriptionId = (invoice as any).subscription as string | undefined;
+        const subscriptionId = (invoice as any)["subscription"] as string | undefined;
         if (subscriptionId) {
           await handleSubscriptionRenewal(invoice);
         }
@@ -134,16 +134,36 @@ export async function POST(request: NextRequest) {
 
 async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, userId: string) {
   try {
+    console.log(`Starting handleSubscriptionPurchase for user: ${userId}`);
+
     // Get the subscription details
-    const subscription = await stripe.subscriptions.retrieve(session.subscription as string);
+    const subscriptionId = session.subscription as string;
+    if (!subscriptionId) {
+      console.error("No subscription ID found in session");
+      return;
+    }
+
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    console.log("Retrieved subscription:", {
+      id: subscription.id,
+      status: subscription.status,
+      items: subscription.items.data.length,
+    });
+
     const lineItem = subscription.items.data[0];
     const priceId = lineItem.price.id;
+    
+    console.log("Price ID from subscription:", priceId);
+    console.log("Available plan configs:", Object.keys(PLAN_CONFIGS));
     
     const planConfig = PLAN_CONFIGS[priceId];
     if (!planConfig) {
       console.error("Unknown price ID:", priceId);
+      console.error("Available price IDs:", Object.keys(PLAN_CONFIGS));
       return;
     }
+
+    console.log("Plan config found:", planConfig);
 
     // Calculate subscription end date
     const subscriptionEndDate = new Date();
@@ -161,20 +181,30 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
     const currentUserData = userDoc.data();
     const currentCredits = currentUserData?.credits || 0;
 
+    console.log("Current user data:", {
+      currentCredits,
+      currentPlanType: currentUserData?.planType,
+    });
+
     // Update user document
-    await updateDoc(userRef, {
+    const updateData = {
       planType: planConfig.planType,
       credits: currentCredits + planConfig.credits,
       subscriptionEndDate: subscriptionEndDate,
       stripeSubscriptionId: subscription.id,
       updatedAt: new Date(),
-    });
+    };
 
-    console.log(`Updated user ${userId} with subscription:`, {
+    console.log("Updating user with data:", updateData);
+
+    await updateDoc(userRef, updateData);
+
+    console.log(`Successfully updated user ${userId} with subscription:`, {
       planType: planConfig.planType,
       creditsAdded: planConfig.credits,
       totalCredits: currentCredits + planConfig.credits,
       subscriptionEndDate: subscriptionEndDate.toISOString(),
+      subscriptionId: subscription.id,
     });
 
   } catch (error) {
@@ -185,8 +215,7 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
 
 async function handleCreditsPurchase(session: Stripe.Checkout.Session, userId: string) {
   try {
-    // For credit purchases, you'd need to define credit packages
-    // This is a placeholder - adjust based on your credit pricing structure
+    console.log(`Starting handleCreditsPurchase for user: ${userId}`);
     
     const userRef = doc(db, "users", userId);
     const userDoc = await getDoc(userRef);
@@ -219,6 +248,8 @@ async function handleCreditsPurchase(session: Stripe.Checkout.Session, userId: s
 
 async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
   try {
+    console.log("Starting handleSubscriptionRenewal");
+
     // Get the customer's Firebase user ID
     const customer = await stripe.customers.retrieve(invoice.customer as string);
     const userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
@@ -228,19 +259,23 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
       return;
     }
 
+    console.log("Found user ID for renewal:", userId);
+
     // Get subscription details
+    // Stripe types may not include 'subscription' on Invoice, so use optional chaining and type assertion
     const subscriptionId = (invoice as any).subscription as string | undefined;
     if (!subscriptionId) {
       console.error("No subscription ID found on invoice:", invoice.id);
       return;
     }
+    
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
     const lineItem = subscription.items.data[0];
     const priceId = lineItem.price.id;
     
     const planConfig = PLAN_CONFIGS[priceId];
     if (!planConfig) {
-      console.error("Unknown price ID:", priceId);
+      console.error("Unknown price ID for renewal:", priceId);
       return;
     }
 
@@ -252,7 +287,7 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
     const userDoc = await getDoc(userRef);
     
     if (!userDoc.exists()) {
-      console.error("User document not found:", userId);
+      console.error("User document not found for renewal:", userId);
       return;
     }
 
@@ -275,6 +310,8 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
 
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   try {
+    console.log("Starting handleSubscriptionChange");
+
     // Get the customer's Firebase user ID
     const customer = await stripe.customers.retrieve(subscription.customer as string);
     const userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
@@ -283,6 +320,8 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       console.error("No Firebase user ID found for customer:", subscription.customer);
       return;
     }
+
+    console.log("Found user ID for subscription change:", userId);
 
     const userRef = doc(db, "users", userId);
     
