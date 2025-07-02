@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { getFirestore, doc, getDoc, collection, getDocs, query, orderBy, where, addDoc, Timestamp, updateDoc, runTransaction } from "firebase/firestore";
@@ -523,14 +523,8 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
   );
 };
 
-export default function DashboardPage() {
-  const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
-  const [userData, setUserData] = useState<any>(null);
-  const [userLetters, setUserLetters] = useState<Letter[]>([]);
-  const [userRequests, setUserRequests] = useState<UserRequest[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null); // <-- add this line
+// Move DashboardPageInner to a separate component
+function DashboardPageInner({ user, setUserData, setSuccessMessage, setUser, setUserLetters, setUserRequests, setError, setLoading, userData, userLetters, userRequests, successMessage, loading, error }: any) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -635,7 +629,7 @@ export default function DashboardPage() {
       }
 
       // Find the letter
-      const letter = userLetters.find(l => l.id === letterId);
+      const letter = userLetters.find((l: Letter) => l.id === letterId);
       if (!letter) {
         alert("Letter not found");
         return;
@@ -739,7 +733,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (error) {
+  if (typeof error !== "undefined" && error) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -783,3 +777,34 @@ export default function DashboardPage() {
     </>
   );
 }
+
+const DashboardPage = () => {
+  const [user, setUser] = useState<any>(null);
+  const [userData, setUserData] = useState<any>(null);
+  const [userLetters, setUserLetters] = useState<Letter[]>([]);
+  const [userRequests, setUserRequests] = useState<UserRequest[]>([]);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <DashboardPageInner
+      user={user}
+      setUser={setUser}
+      userData={userData}
+      setUserData={setUserData}
+      userLetters={userLetters}
+      setUserLetters={setUserLetters}
+      userRequests={userRequests}
+      setUserRequests={setUserRequests}
+      successMessage={successMessage}
+      setSuccessMessage={setSuccessMessage}
+      loading={loading}
+      setLoading={setLoading}
+      error={error}
+      setError={setError}
+    />
+  );
+};
+
+export default DashboardPage;

@@ -4,7 +4,11 @@ import Stripe from "stripe";
 import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 import { app } from "@/firebase/config";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+if (!stripeSecretKey) {
+  throw new Error("STRIPE_SECRET_KEY is not set. Please check your .env.local file.");
+}
+const stripe = new Stripe(stripeSecretKey, {
   apiVersion: "2025-06-30.basil",
 });
 
