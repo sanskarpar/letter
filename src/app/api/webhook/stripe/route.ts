@@ -1,7 +1,7 @@
 // app/api/webhooks/stripe/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { getFirestore, doc, updateDoc, getDoc } from "firebase/firestore";
+import { getFirestore, doc, updateDoc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { app } from "@/firebase/config";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -12,7 +12,6 @@ const db = getFirestore(app);
 
 // Plan configurations - using direct price IDs instead of env variables
 function getPlanConfig(priceId: string) {
-  // Create a mapping based on your actual Stripe price IDs
   const configs: { [key: string]: any } = {};
   
   // Monthly plan
@@ -53,7 +52,7 @@ export async function POST(request: NextRequest) {
   const signature = request.headers.get("stripe-signature");
 
   if (!signature) {
-    console.error("No Stripe signature found");
+    console.error("❌ No Stripe signature found");
     return NextResponse.json({ error: "No signature" }, { status: 400 });
   }
 
@@ -66,7 +65,7 @@ export async function POST(request: NextRequest) {
       process.env.STRIPE_WEBHOOK_SECRET!
     );
   } catch (err: any) {
-    console.error("Webhook signature verification failed:", err.message);
+    console.error("❌ Webhook signature verification failed:", err.message);
     return NextResponse.json(
       { error: `Webhook Error: ${err.message}` },
       { status: 400 }
@@ -114,12 +113,11 @@ export async function POST(request: NextRequest) {
         console.log("📄 Processing invoice.payment_succeeded:", {
           invoiceId: invoice.id,
           customerId: invoice.customer,
-          subscriptionId: (invoice as any).subscription,
+          subscriptionId: (invoice as any).subscription as string,
         });
 
         // Handle recurring subscription payments
-        const subscriptionId = (invoice as any).subscription as string | undefined;
-        if (subscriptionId) {
+        if ((invoice as any).subscription) {
           await handleSubscriptionRenewal(invoice);
         }
         
@@ -173,7 +171,7 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       id: subscription.id,
       status: subscription.status,
       items: subscription.items.data.length,
-      metadata: subscription.metadata,
+      customer: subscription.customer,
     });
 
     if (subscription.items.data.length === 0) {
@@ -219,6 +217,20 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       currentCredits,
       currentPlanType: currentUserData?.planType,
     });
+
+    // CRITICAL: Store the customer ID in Stripe customer metadata for future reference
+    if (subscription.customer && typeof subscription.customer === 'string') {
+      try {
+        await stripe.customers.update(subscription.customer, {
+          metadata: {
+            firebaseUserId: userId
+          }
+        });
+        console.log("✅ Updated Stripe customer metadata with Firebase user ID");
+      } catch (error) {
+        console.error("⚠️ Failed to update Stripe customer metadata:", error);
+      }
+    }
 
     // Update user document
     const updateData = {
@@ -294,9 +306,50 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
   try {
     console.log("🔄 Starting handleSubscriptionRenewal");
 
-    // Get the customer's Firebase user ID
+    // Get the subscription details first
+    const subscriptionId = (invoice as any).subscription as string;
+    if (!subscriptionId) {
+      console.error("❌ No subscription ID found on invoice:", invoice.id);
+      return;
+    }
+
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ['items.data.price']
+    });
+
+    // Get the customer's Firebase user ID from Stripe customer metadata
     const customer = await stripe.customers.retrieve(invoice.customer as string);
-    const userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
+    let userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
+    
+    if (!userId) {
+      console.log("⚠️ No Firebase user ID in customer metadata, attempting to find by subscription ID");
+      
+      // Fallback: Try to find user by subscription ID in Firestore
+      // This is a more expensive operation but necessary as backup
+      const usersRef = collection(db, "users");
+      const q = query(
+        usersRef,
+        // @ts-ignore
+        where("stripeSubscriptionId", "==", subscriptionId)
+      );
+      const userQuerySnapshot = await getDocs(q);
+      if (!userQuerySnapshot.empty) {
+        userId = userQuerySnapshot.docs[0].id;
+        console.log("✅ Found user by subscription ID:", userId);
+
+        // Update the Stripe customer metadata for future use
+        try {
+          await stripe.customers.update(invoice.customer as string, {
+            metadata: {
+              firebaseUserId: userId
+            }
+          });
+          console.log("✅ Updated Stripe customer metadata with Firebase user ID");
+        } catch (error) {
+          console.error("⚠️ Failed to update Stripe customer metadata:", error);
+        }
+      }
+    }
     
     if (!userId) {
       console.error("❌ No Firebase user ID found for customer:", invoice.customer);
@@ -305,14 +358,6 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
 
     console.log("👤 Found user ID for renewal:", userId);
 
-    // Get subscription details
-    const subscriptionId = (invoice as any).subscription as string | undefined;
-    if (!subscriptionId) {
-      console.error("❌ No subscription ID found on invoice:", invoice.id);
-      return;
-    }
-    
-    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
     const lineItem = subscription.items.data[0];
     const priceId = lineItem.price.id;
     
@@ -343,7 +388,7 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
       updatedAt: new Date(),
     });
 
-    console.log(`✅ Renewed subscription for user ${userId}. Added ${planConfig.credits} credits.`);
+    console.log(`✅ Renewed subscription for user ${userId}. Added ${planConfig.credits} credits. Total: ${currentCredits + planConfig.credits}`);
 
   } catch (error) {
     console.error("💥 Error handling subscription renewal:", error);
@@ -357,7 +402,28 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
 
     // Get the customer's Firebase user ID
     const customer = await stripe.customers.retrieve(subscription.customer as string);
-    const userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
+    let userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
+    
+    if (!userId) {
+      console.log("⚠️ No Firebase user ID in customer metadata, attempting to find by subscription ID");
+      
+      // Fallback: Try to find user by subscription ID
+      // Use Firestore modular SDK to query users by stripeSubscriptionId
+      const usersRef = collection(db, "users");
+      const q = query(usersRef, 
+        // @ts-ignore
+        // Firestore types may not recognize this field, but it's valid if your schema has it
+        // If you have a typescript error, you may need to adjust your Firestore data model typings
+        // or use 'as any' for the field name
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        where("stripeSubscriptionId", "==", subscription.id)
+      );
+      const userQuerySnapshot = await getDocs(q);
+      if (!userQuerySnapshot.empty) {
+        userId = userQuerySnapshot.docs[0].id;
+        console.log("✅ Found user by subscription ID:", userId);
+      }
+    }
     
     if (!userId) {
       console.error("❌ No Firebase user ID found for customer:", subscription.customer);
@@ -368,7 +434,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
 
     const userRef = doc(db, "users", userId);
     
-    if (subscription.status === "canceled" || subscription.status === "unpaid") {
+    if (subscription.status === "canceled" || subscription.status === "unpaid" || subscription.status === "incomplete_expired") {
       // Downgrade to free plan
       await updateDoc(userRef, {
         planType: "free",
@@ -378,6 +444,15 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       });
       
       console.log(`⬇️ Downgraded user ${userId} to free plan`);
+    } else if (subscription.status === "active") {
+      // Ensure the user is on premium plan (in case of reactivation)
+      await updateDoc(userRef, {
+        planType: "premium",
+        stripeSubscriptionId: subscription.id,
+        updatedAt: new Date(),
+      });
+      
+      console.log(`⬆️ Activated premium plan for user ${userId}`);
     }
 
   } catch (error) {
