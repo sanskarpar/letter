@@ -10,37 +10,43 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 
 const db = getFirestore(app);
 
-// Plan configurations - using direct price IDs instead of env variables
+// Plan configurations with proper credit system
 function getPlanConfig(priceId: string) {
   const configs: { [key: string]: any } = {};
   
-  // Monthly plan
+  // Monthly plan: 5 free + 20 bonus = 25 credits per month
   if (process.env.STRIPE_MONTHLY_PRICE_ID) {
     configs[process.env.STRIPE_MONTHLY_PRICE_ID] = {
       planType: "premium",
-      credits: 100,
+      credits: 25, // 5 free + 20 bonus credits
       durationMonths: 1,
-      name: "Monthly Premium"
+      name: "Monthly Premium",
+      freeCredits: 5,
+      bonusCredits: 20
     };
   }
   
-  // Semi-annual plan
+  // Semi-annual plan: (5 free + 20 bonus) × 6 months = 150 credits
   if (process.env.STRIPE_SEMIANNUAL_PRICE_ID) {
     configs[process.env.STRIPE_SEMIANNUAL_PRICE_ID] = {
       planType: "premium",
-      credits: 600,
+      credits: 150, // 25 credits × 6 months
       durationMonths: 6,
-      name: "Semi-Annual Premium"
+      name: "Semi-Annual Premium",
+      freeCredits: 30, // 5 × 6 months
+      bonusCredits: 120 // 20 × 6 months
     };
   }
   
-  // Annual plan
+  // Annual plan: (5 free + 20 bonus) × 12 months = 300 credits
   if (process.env.STRIPE_ANNUAL_PRICE_ID) {
     configs[process.env.STRIPE_ANNUAL_PRICE_ID] = {
       planType: "premium",
-      credits: 1200,
+      credits: 300, // 25 credits × 12 months
       durationMonths: 12,
-      name: "Annual Premium"
+      name: "Annual Premium",
+      freeCredits: 60, // 5 × 12 months
+      bonusCredits: 240 // 20 × 12 months
     };
   }
   
@@ -271,7 +277,7 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       }
     }
 
-    // Prepare update data
+    // Prepare update data with proper credit system
     const updateData = {
       planType: planConfig.planType,
       credits: currentCredits + planConfig.credits,
@@ -279,9 +285,24 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       stripeSubscriptionId: subscription.id,
       stripeCustomerId: subscription.customer,
       updatedAt: new Date(),
+      // Track credit breakdown for transparency
+      lastCreditGrant: {
+        date: new Date(),
+        freeCredits: planConfig.freeCredits,
+        bonusCredits: planConfig.bonusCredits,
+        totalCredits: planConfig.credits,
+        planName: planConfig.name
+      }
     };
 
     console.log("📝 Preparing to update user with data:", updateData);
+    console.log("📝 Credit breakdown:", {
+      previousCredits: currentCredits,
+      freeCreditsAdded: planConfig.freeCredits,
+      bonusCreditsAdded: planConfig.bonusCredits,
+      totalCreditsAdded: planConfig.credits,
+      newTotalCredits: currentCredits + planConfig.credits
+    });
     console.log("📝 User reference path:", userRef.path);
 
     // Update user document
@@ -305,10 +326,13 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
 
     console.log(`✅ Successfully updated user ${userId} with subscription:`, {
       planType: planConfig.planType,
-      creditsAdded: planConfig.credits,
-      totalCredits: currentCredits + planConfig.credits,
+      freeCreditsAdded: planConfig.freeCredits,
+      bonusCreditsAdded: planConfig.bonusCredits,
+      totalCreditsAdded: planConfig.credits,
+      newTotalCredits: currentCredits + planConfig.credits,
       subscriptionEndDate: subscriptionEndDate.toISOString(),
       subscriptionId: subscription.id,
+      planDuration: `${planConfig.durationMonths} months`
     });
 
   } catch (error) {
@@ -443,7 +467,7 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
       throw new Error(`Unknown price ID for renewal: ${priceId}`);
     }
 
-    // Extend subscription and add credits
+    // Extend subscription and add credits based on the plan
     const subscriptionEndDate = new Date();
     subscriptionEndDate.setMonth(subscriptionEndDate.getMonth() + planConfig.durationMonths);
 
@@ -458,13 +482,30 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
     const currentUserData = userDoc.data();
     const currentCredits = currentUserData?.credits || 0;
 
-    await updateDoc(userRef, {
+    const renewalUpdateData = {
       credits: currentCredits + planConfig.credits,
       subscriptionEndDate: subscriptionEndDate,
       updatedAt: new Date(),
-    });
+      lastCreditGrant: {
+        date: new Date(),
+        freeCredits: planConfig.freeCredits,
+        bonusCredits: planConfig.bonusCredits,
+        totalCredits: planConfig.credits,
+        planName: planConfig.name,
+        type: 'renewal'
+      }
+    };
 
-    console.log(`✅ Renewed subscription for user ${userId}. Added ${planConfig.credits} credits. Total: ${currentCredits + planConfig.credits}`);
+    await updateDoc(userRef, renewalUpdateData);
+
+    console.log(`✅ Renewed subscription for user ${userId}:`, {
+      freeCreditsAdded: planConfig.freeCredits,
+      bonusCreditsAdded: planConfig.bonusCredits,
+      totalCreditsAdded: planConfig.credits,
+      newTotalCredits: currentCredits + planConfig.credits,
+      planDuration: `${planConfig.durationMonths} months`,
+      newEndDate: subscriptionEndDate.toISOString()
+    });
 
   } catch (error) {
     console.error("💥 Error handling subscription renewal:", error);
