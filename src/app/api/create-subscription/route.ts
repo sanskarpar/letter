@@ -89,23 +89,32 @@ export async function POST(request: NextRequest) {
     }
 
     // Create Stripe checkout session
-    const sessionData = {
+    const sessionData: Stripe.Checkout.SessionCreateParams = {
       customer: stripeCustomerId,
-      payment_method_types: ["card"] as Stripe.Checkout.SessionCreateParams.PaymentMethodType[],
+      payment_method_types: ["card"],
       line_items: [
         {
           price: priceId,
           quantity: 1,
         },
       ],
-      mode: "subscription" as const,
-      success_url: `${baseUrl}/dashboard?success=subscription`,
+      mode: "subscription",
+      success_url: `${baseUrl}/dashboard?success=subscription&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/payments?canceled=true`,
       metadata: {
         userId,
         planId,
         userEmail,
         priceId, // Add price ID to metadata for debugging
+      },
+      // Add subscription_data to ensure metadata is passed to subscription
+      subscription_data: {
+        metadata: {
+          userId,
+          planId,
+          userEmail,
+          priceId,
+        },
       },
     };
 

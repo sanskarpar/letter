@@ -66,6 +66,7 @@ export async function POST(request: NextRequest) {
           customerId: session.customer,
           metadata: session.metadata,
           mode: session.mode,
+          subscriptionId: session.subscription,
         });
 
         const userId = session.metadata?.userId;
@@ -76,7 +77,8 @@ export async function POST(request: NextRequest) {
         }
 
         // Handle subscription purchase
-        if (session.mode === "subscription") {
+        if (session.mode === "subscription" && session.subscription) {
+          console.log("Handling subscription purchase for session:", session.id);
           await handleSubscriptionPurchase(session, userId);
         } else if (session.mode === "payment") {
           // Handle one-time credit purchase
@@ -96,7 +98,7 @@ export async function POST(request: NextRequest) {
         });
 
         // Handle recurring subscription payments
-        const subscriptionId = (invoice as any)["subscription"] as string | undefined;
+        const subscriptionId = (invoice as any).subscription as string | undefined;
         if (subscriptionId) {
           await handleSubscriptionRenewal(invoice);
         }
@@ -148,6 +150,7 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       id: subscription.id,
       status: subscription.status,
       items: subscription.items.data.length,
+      metadata: subscription.metadata,
     });
 
     const lineItem = subscription.items.data[0];
@@ -160,7 +163,21 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
     if (!planConfig) {
       console.error("Unknown price ID:", priceId);
       console.error("Available price IDs:", Object.keys(PLAN_CONFIGS));
-      return;
+      
+      // Try to get plan info from subscription metadata as fallback
+      const planId = subscription.metadata?.planId || session.metadata?.planId;
+      if (planId) {
+        console.log("Trying to use planId from metadata:", planId);
+        const fallbackPriceId = process.env[`STRIPE_${planId.toUpperCase().replace('-', '')}_PRICE_ID`];
+        if (fallbackPriceId && PLAN_CONFIGS[fallbackPriceId]) {
+          console.log("Using fallback plan config");
+        } else {
+          console.error("No fallback plan config found");
+          return;
+        }
+      } else {
+        return;
+      }
     }
 
     console.log("Plan config found:", planConfig);
@@ -262,7 +279,6 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
     console.log("Found user ID for renewal:", userId);
 
     // Get subscription details
-    // Stripe types may not include 'subscription' on Invoice, so use optional chaining and type assertion
     const subscriptionId = (invoice as any).subscription as string | undefined;
     if (!subscriptionId) {
       console.error("No subscription ID found on invoice:", invoice.id);
