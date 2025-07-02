@@ -1,3 +1,4 @@
+// app/login/page.tsx
 "use client";
 import React, { useState } from "react";
 import { getAuth, signInWithEmailAndPassword } from "firebase/auth";
@@ -13,11 +14,9 @@ export default function LoginPage() {
   const auth = getAuth(app);
   const router = useRouter();
 
-  // Function to trigger credit loading check
-  const triggerCreditCheck = async (userId: string) => {
+  const checkMonthlyCredits = async (userId: string) => {
     try {
-      // Call your backend API to check and load credits
-      await fetch('/api/users/check-credits', {
+      await fetch('/api/check-credits', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -25,8 +24,7 @@ export default function LoginPage() {
         body: JSON.stringify({ userId }),
       });
     } catch (error) {
-      console.error('Credit check failed:', error);
-      // Don't block login if credit check fails
+      console.error("Error checking monthly credits:", error);
     }
   };
 
@@ -37,13 +35,12 @@ export default function LoginPage() {
 
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
       
-      // Trigger credit loading check after successful login
-      if (userCredential.user) {
-        await triggerCreditCheck(userCredential.user.uid);
-      }
+      // Check monthly credits after successful login
+      await checkMonthlyCredits(user.uid);
       
-      // Login successful - redirect to dashboard
+      // Redirect to dashboard
       router.push('/dashboard');
     } catch (err) {
       setError("Failed to login. Please check your email and password.");
@@ -62,7 +59,7 @@ export default function LoginPage() {
             {error}
           </div>
         )}
-        <div className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label className="block text-gray-700 mb-2">Email</label>
             <input
@@ -85,7 +82,7 @@ export default function LoginPage() {
             />
           </div>
           <button
-            onClick={handleSubmit}
+            type="submit"
             disabled={loading}
             className={`w-full bg-blue-600 text-white py-3 rounded-full font-semibold hover:bg-blue-700 transition-colors ${
               loading ? "opacity-70 cursor-not-allowed" : ""
@@ -93,8 +90,8 @@ export default function LoginPage() {
           >
             {loading ? "Logging in..." : "Login"}
           </button>
-        </div>
-        <div className="mt-6 text-center text-gray-500">
+        </form>
+        <div className="mt-6 text-center text-gray-600">
           Don't have an account?{" "}
           <a
             href="#"
