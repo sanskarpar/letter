@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import { getAuth, signInWithEmailAndPassword } from "firebase/auth";
 import { app } from "@/firebase/config";
-import { useRouter } from "next/navigation"; // Add this import
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -11,7 +11,24 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   const auth = getAuth(app);
-  const router = useRouter(); // Add this line
+  const router = useRouter();
+
+  // Function to trigger credit loading check
+  const triggerCreditCheck = async (userId: string) => {
+    try {
+      // Call your backend API to check and load credits
+      await fetch('/api/users/check-credits', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId }),
+      });
+    } catch (error) {
+      console.error('Credit check failed:', error);
+      // Don't block login if credit check fails
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,7 +36,13 @@ export default function LoginPage() {
     setError("");
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      
+      // Trigger credit loading check after successful login
+      if (userCredential.user) {
+        await triggerCreditCheck(userCredential.user.uid);
+      }
+      
       // Login successful - redirect to dashboard
       router.push('/dashboard');
     } catch (err) {
@@ -39,7 +62,7 @@ export default function LoginPage() {
             {error}
           </div>
         )}
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="space-y-6">
           <div>
             <label className="block text-gray-700 mb-2">Email</label>
             <input
@@ -62,7 +85,7 @@ export default function LoginPage() {
             />
           </div>
           <button
-            type="submit"
+            onClick={handleSubmit}
             disabled={loading}
             className={`w-full bg-blue-600 text-white py-3 rounded-full font-semibold hover:bg-blue-700 transition-colors ${
               loading ? "opacity-70 cursor-not-allowed" : ""
@@ -70,7 +93,7 @@ export default function LoginPage() {
           >
             {loading ? "Logging in..." : "Login"}
           </button>
-        </form>
+        </div>
         <div className="mt-6 text-center text-gray-500">
           Don't have an account?{" "}
           <a

@@ -83,10 +83,89 @@ async function getUserIdFromSubscription(subscription: Stripe.Subscription): Pro
   return userId;
 }
 
-// Check and add monthly credits if due
+// Calculate how many months have passed between two dates
+function getMonthsDifference(startDate: Date, endDate: Date): number {
+  const startYear = startDate.getFullYear();
+  const startMonth = startDate.getMonth();
+  const endYear = endDate.getFullYear();
+  const endMonth = endDate.getMonth();
+  return (endYear - startYear) * 12 + (endMonth - startMonth);
+}
+
+// Load up missed monthly credits when user logs in or on webhook
+async function loadMissedMonthlyCredits(userId: string) {
+  const userRef = doc(db, "users", userId);
+
+  return runTransaction(db, async (transaction) => {
+    const userDoc = await transaction.get(userRef);
+    if (!userDoc.exists()) {
+      throw new Error(`User not found: ${userId}`);
+    }
+
+    const userData = userDoc.data();
+
+    // Only process for premium users
+    if (userData.planType !== "premium") {
+      logEvent("SkippedCreditLoad", { userId, reason: "Not premium user" });
+      return;
+    }
+
+    const now = new Date();
+    const subscriptionStart = userData.subscriptionStart?.toDate();
+    const lastMonthlyCredit = userData.lastMonthlyCredit?.toDate() || subscriptionStart;
+
+    if (!subscriptionStart || !lastMonthlyCredit) {
+      logEvent("SkippedCreditLoad", { userId, reason: "Missing subscription or credit dates" });
+      return;
+    }
+
+    // Calculate months since last credit allocation
+    const monthsSinceLastCredit = getMonthsDifference(lastMonthlyCredit, now);
+
+    if (monthsSinceLastCredit > 0) {
+      const creditsToAdd = monthsSinceLastCredit * MONTHLY_CREDITS;
+      const currentCredits = userData.credits || 0;
+
+      // Create credit history entries for each missed month
+      const creditHistoryEntries = [];
+      for (let i = 1; i <= monthsSinceLastCredit; i++) {
+        const creditDate = new Date(lastMonthlyCredit);
+        creditDate.setMonth(creditDate.getMonth() + i);
+
+        creditHistoryEntries.push({
+          date: Timestamp.fromDate(creditDate),
+          credits: MONTHLY_CREDITS,
+          type: "monthly_backfill"
+        });
+      }
+
+      // Update user document
+      transaction.update(userRef, {
+        credits: currentCredits + creditsToAdd,
+        lastMonthlyCredit: Timestamp.now(),
+        nextCreditDate: getNextCreditDate(now),
+        creditHistory: arrayUnion(...creditHistoryEntries),
+        updatedAt: Timestamp.now()
+      });
+
+      logEvent("MissedCreditsLoaded", {
+        userId,
+        monthsMissed: monthsSinceLastCredit,
+        creditsAdded: creditsToAdd,
+        newTotal: currentCredits + creditsToAdd,
+        lastCreditDate: lastMonthlyCredit.toISOString(),
+        currentDate: now.toISOString()
+      });
+    } else {
+      logEvent("NoMissedCredits", { userId, lastCreditDate: lastMonthlyCredit.toISOString() });
+    }
+  });
+}
+
+// Updated checkMonthlyCredits function (replace the existing one)
 async function checkMonthlyCredits(userId: string) {
   const userRef = doc(db, "users", userId);
-  
+
   return runTransaction(db, async (transaction) => {
     const userDoc = await transaction.get(userRef);
     if (!userDoc.exists()) {
@@ -97,37 +176,20 @@ async function checkMonthlyCredits(userId: string) {
     if (userData.planType !== "premium") return;
 
     const now = new Date();
+    const subscriptionStart = userData.subscriptionStart?.toDate();
     const lastCreditDate = userData.lastMonthlyCredit?.toDate();
-    const nextCreditDate = userData.nextCreditDate?.toDate();
-    
-    // If no credits have been given yet, initialize
-    if (!lastCreditDate) {
+
+    // If no credits have been given yet, initialize with subscription start
+    if (!lastCreditDate && subscriptionStart) {
       transaction.update(userRef, {
-        lastMonthlyCredit: Timestamp.now(),
-        nextCreditDate: getNextCreditDate(new Date())
+        lastMonthlyCredit: userData.subscriptionStart,
+        nextCreditDate: getNextCreditDate(subscriptionStart)
       });
       return;
     }
 
-    // Check if it's time for monthly credits
-    if (now >= (nextCreditDate || new Date(0))) {
-      transaction.update(userRef, {
-        credits: increment(MONTHLY_CREDITS),
-        lastMonthlyCredit: Timestamp.now(),
-        nextCreditDate: getNextCreditDate(now),
-        creditHistory: arrayUnion({
-          date: Timestamp.now(),
-          credits: MONTHLY_CREDITS,
-          type: "monthly"
-        })
-      });
-
-      logEvent("MonthlyCreditsAdded", { 
-        userId, 
-        creditsAdded: MONTHLY_CREDITS,
-        nextCreditDate: getNextCreditDate(now).toDate().toISOString()
-      });
-    }
+    // Use the enhanced loading function to handle multiple months
+    await loadMissedMonthlyCredits(userId);
   });
 }
 
@@ -253,5 +315,16 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     // Check if credits are due after reactivation
     await checkMonthlyCredits(userId);
     logEvent("SubscriptionReactivated", { userId });
+  }
+}
+
+// Function to call when user logs in (add this to your auth logic)
+export async function handleUserLogin(userId: string) {
+  try {
+    await loadMissedMonthlyCredits(userId);
+    logEvent("UserLoginCreditCheck", { userId });
+  } catch (error: any) {
+    logEvent("UserLoginCreditCheckError", { userId, error: error.message });
+    // Don't throw - we don't want to block login if credit loading fails
   }
 }
