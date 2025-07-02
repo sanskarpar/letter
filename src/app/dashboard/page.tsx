@@ -1,67 +1,249 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, getDoc, collection, getDocs, query, orderBy, updateDoc } from "firebase/firestore";
+import { getFirestore, doc, getDoc, collection, getDocs, query, orderBy, where, addDoc, Timestamp, updateDoc, runTransaction } from "firebase/firestore";
 import { app } from "@/firebase/config";
-import { CreditCard, Calendar, User, Package, Shield, Mail, Eye, FileText, Download } from 'lucide-react';
+import { CreditCard, Calendar, User, Package, Shield, Mail, Eye, FileText, Download, Clock, CheckCircle, Truck, Scan, AlertCircle } from 'lucide-react';
 
-type Mail = {
+type Letter = {
   id: string;
-  title: string;
-  fileUrl: string;
-  fileName: string;
-  uploadedAt: any;
-  uploadedBy: string;
-  status: "unread" | "read";
+  senderName: string;
+  receiverName: string;
+  dateReceived: any;
+  status: "unscanned" | "processing" | "completed";
+  userId: string;
+  addedAt: any;
+  userRequests?: {
+    pdfScan: boolean;
+    delivery: boolean;
+    deliveryAddress?: string;
+    requestedAt: any;
+    creditsDeducted: number;
+  };
+  adminActions?: {
+    scanned: boolean;
+    delivered: boolean;
+    pdfUrl?: string;
+    completedAt?: any;
+  };
 };
 
-const MailScannerDashboard = ({ userData, userMails, onMarkAsRead }: { 
+type UserRequest = {
+  id: string;
+  letterId: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  senderName: string;
+  receiverName: string;
+  pdfScan: boolean;
+  delivery: boolean;
+  deliveryAddress?: string;
+  requestedAt: any;
+  creditsDeducted: number;
+  status: "pending" | "processing" | "completed";
+};
+
+const LetterRequestModal = ({ 
+    letter, 
+    onClose, 
+    onSubmit, 
+    userCredits 
+  }: { 
+    letter: Letter; 
+    onClose: () => void; 
+    onSubmit: (requests: { pdfScan: boolean; delivery: boolean; deliveryAddress?: string }) => void;
+    userCredits: number;
+  }) => {
+    const [pdfScan, setPdfScan] = useState(false);
+    const [delivery, setDelivery] = useState(false);
+    const [deliveryAddress, setDeliveryAddress] = useState("");
+    
+    const totalCredits = (pdfScan ? 1 : 0) + (delivery ? 1 : 0);
+    const canAfford = userCredits >= totalCredits;
+
+    const handleSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!pdfScan && !delivery) {
+        alert("Please select at least one service");
+        return;
+      }
+      if (delivery && !deliveryAddress.trim()) {
+        alert("Please provide a delivery address");
+        return;
+      }
+      if (!canAfford) {
+        alert("Insufficient credits");
+        return;
+      }
+      
+      // Only include deliveryAddress if delivery is selected
+      const requestData = {
+        pdfScan,
+        delivery,
+        ...(delivery && { deliveryAddress: deliveryAddress.trim() })
+      };
+      
+      onSubmit(requestData);
+    };
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg p-6 max-w-md w-full">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold">Request Services</h3>
+            <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
+              ✕
+            </button>
+          </div>
+          
+          <div className="mb-4 p-3 bg-gray-50 rounded">
+            <p className="font-medium">Letter Details:</p>
+            <p className="text-sm text-gray-600">From: {letter.senderName}</p>
+            <p className="text-sm text-gray-600">To: {letter.receiverName}</p>
+            <p className="text-sm text-gray-600">Date: {letter.dateReceived?.toDate?.()?.toLocaleDateString() || 'N/A'}</p>
+          </div>
+
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4">
+              <div className="space-y-3">
+                <label className="flex items-center space-x-3">
+                  <input
+                    type="checkbox"
+                    checked={pdfScan}
+                    onChange={(e) => setPdfScan(e.target.checked)}
+                    className="w-4 h-4 text-blue-600"
+                  />
+                  <span className="flex-1">PDF Scan (1 credit)</span>
+                  <Scan className="w-4 h-4 text-blue-600" />
+                </label>
+                
+                <label className="flex items-center space-x-3">
+                  <input
+                    type="checkbox"
+                    checked={delivery}
+                    onChange={(e) => setDelivery(e.target.checked)}
+                    className="w-4 h-4 text-green-600"
+                  />
+                  <span className="flex-1">Delivery Service (1 credit)</span>
+                  <Truck className="w-4 h-4 text-green-600" />
+                </label>
+              </div>
+
+              {delivery && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Delivery Address
+                  </label>
+                  <textarea
+                    value={deliveryAddress}
+                    onChange={(e) => setDeliveryAddress(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    rows={3}
+                    placeholder="Enter complete delivery address"
+                    required={delivery}
+                  />
+                </div>
+              )}
+
+              <div className="bg-blue-50 p-3 rounded">
+                <div className="flex justify-between text-sm">
+                  <span>Total Credits Required:</span>
+                  <span className="font-medium">{totalCredits}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Your Available Credits:</span>
+                  <span className={`font-medium ${canAfford ? 'text-green-600' : 'text-red-600'}`}>
+                    {userCredits}
+                  </span>
+                </div>
+              </div>
+
+              {!canAfford && (
+                <div className="bg-red-50 border border-red-200 p-3 rounded flex items-center">
+                  <AlertCircle className="w-4 h-4 text-red-600 mr-2" />
+                  <span className="text-red-700 text-sm">Insufficient credits for this request</span>
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex-1 px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!canAfford || (!pdfScan && !delivery)}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Submit Request
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
+
+const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeRequest }: { 
   userData: any; 
-  userMails: Mail[];
-  onMarkAsRead: (mailId: string) => Promise<void>;
+  userLetters: Letter[];
+  userRequests: UserRequest[];
+  onMakeRequest: (letterId: string, requests: { pdfScan: boolean; delivery: boolean; deliveryAddress?: string }) => Promise<void>;
 }) => {
   const router = useRouter();
-  const [selectedMail, setSelectedMail] = useState<Mail | null>(null);
+  const [selectedLetter, setSelectedLetter] = useState<Letter | null>(null);
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [selectedLetterForRequest, setSelectedLetterForRequest] = useState<Letter | null>(null);
 
-  // Format the subscription end date
   const formatDate = (date: any) => {
     if (!date) return "N/A";
-    const d = date.toDate ? date.toDate() : new Date(date);
-    return d.toLocaleDateString();
-  };
-
-  const handleViewMail = async (mail: Mail) => {
-    setSelectedMail(mail);
-    // Mark as read when viewing
-    await onMarkAsRead(mail.id);
-    console.log(`Marking mail ${mail.id} as read when viewing`);
-  };
-
-  // Updated handleDownloadMail to also mark as read
-  const handleDownloadMail = async (mail: Mail) => {
-    try {
-      // Mark as read when downloading (before download starts)
-      await onMarkAsRead(mail.id);
-      console.log(`Marking mail ${mail.id} as read before download`);
-      
-      const response = await fetch(mail.fileUrl);
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = mail.fileName || `${mail.title}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error('Error downloading file:', error);
-      // Still mark as read even if download fails
-      await onMarkAsRead(mail.id);
-      console.log(`Marking mail ${mail.id} as read after download error`);
-      window.open(mail.fileUrl, '_blank');
+    // Support Firestore Timestamp or JS Date
+    if (date.toDate) {
+      return date.toDate().toLocaleDateString();
     }
+    if (date instanceof Date) {
+      return date.toLocaleDateString();
+    }
+    return "N/A";
+  };
+
+  const handleMakeRequest = (letter: Letter) => {
+    setSelectedLetterForRequest(letter);
+    setShowRequestModal(true);
+  };
+
+  const handleSubmitRequest = async (requests: { pdfScan: boolean; delivery: boolean; deliveryAddress?: string }) => {
+    if (selectedLetterForRequest) {
+      await onMakeRequest(selectedLetterForRequest.id, requests);
+      setShowRequestModal(false);
+      setSelectedLetterForRequest(null);
+    }
+  };
+
+  const getLetterStatus = (letter: Letter) => {
+    const request = userRequests.find(r => r.letterId === letter.id);
+    if (request) {
+      switch (request.status) {
+        case "pending":
+          return { text: "Request Pending", color: "bg-yellow-100 text-yellow-800", icon: Clock };
+        case "processing":
+          return { text: "Processing", color: "bg-blue-100 text-blue-800", icon: Clock };
+        case "completed":
+          return { text: "Completed", color: "bg-green-100 text-green-800", icon: CheckCircle };
+      }
+    }
+    return { text: "No Request", color: "bg-gray-100 text-gray-800", icon: Mail };
+  };
+
+  const canMakeRequest = (letter: Letter) => {
+    const request = userRequests.find(r => r.letterId === letter.id);
+    return !request || request.status === "completed";
   };
 
   return (
@@ -91,7 +273,6 @@ const MailScannerDashboard = ({ userData, userMails, onMarkAsRead }: {
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Plan Information Card */}
             <div className="bg-blue-50 border border-blue-100 p-6 rounded-lg shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-xl font-semibold text-gray-800">Your Plan</h3>
@@ -108,17 +289,19 @@ const MailScannerDashboard = ({ userData, userMails, onMarkAsRead }: {
                   <div>
                     <p className="text-gray-500">Subscription End Date</p>
                     <p className="text-lg font-medium text-gray-800">
-                      {formatDate(userData?.subscriptionEndDate)}
+                      {userData?.subscriptionEndDate ? formatDate(userData?.subscriptionEndDate) : "N/A"}
                     </p>
                   </div>
                 )}
-                <button className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors">
+                <button
+                  className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                  onClick={() => router.push("/payments")}
+                >
                   {userData?.planType === 'free' ? 'Upgrade Plan' : 'Manage Subscription'}
                 </button>
               </div>
             </div>
 
-            {/* Credits Information Card */}
             <div className="bg-green-50 border border-green-100 p-6 rounded-lg shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-xl font-semibold text-gray-800">Your Credits</h3>
@@ -131,95 +314,153 @@ const MailScannerDashboard = ({ userData, userMails, onMarkAsRead }: {
                     {userData?.credits ?? 0}
                   </p>
                 </div>
-                <button className="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition-colors">
+                <div className="text-sm text-gray-600">
+                  <p>• PDF Scan: 1 credit</p>
+                  <p>• Delivery: 1 credit</p>
+                  <p>• Both services: 2 credits</p>
+                </div>
+                <button
+                  className="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition-colors"
+                  onClick={() => router.push("/payments")}
+                >
                   Buy More Credits
                 </button>
               </div>
             </div>
 
-            {/* Mail Summary Card */}
             <div className="bg-orange-50 border border-orange-100 p-6 rounded-lg shadow-sm">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-semibold text-gray-800">Your Mail</h3>
+                <h3 className="text-xl font-semibold text-gray-800">Your Letters</h3>
                 <Mail className="w-6 h-6 text-orange-600" />
               </div>
               <div className="space-y-4">
                 <div className="flex justify-between">
-                  <span className="text-gray-500">Total Mail:</span>
-                  <span className="font-medium">{userMails.length}</span>
+                  <span className="text-gray-500">Total Letters:</span>
+                  <span className="font-medium">{userLetters.length}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-500">Unread:</span>
+                  <span className="text-gray-500">Unscanned:</span>
                   <span className="font-medium text-red-600">
-                    {userMails.filter(mail => mail.status === "unread").length}
+                    {userLetters.filter(letter => letter.status === "unscanned").length}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-500">Read:</span>
+                  <span className="text-gray-500">Completed:</span>
                   <span className="font-medium text-green-600">
-                    {userMails.filter(mail => mail.status === "read").length}
+                    {userLetters.filter(letter => letter.status === "completed").length}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Active Requests:</span>
+                  <span className="font-medium text-blue-600">
+                    {userRequests.filter(req => req.status !== "completed").length}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Mail List */}
             <div className="lg:col-span-2 bg-gray-50 border border-gray-100 rounded-lg shadow-sm">
               <div className="p-6 border-b border-gray-200">
                 <h3 className="text-xl font-semibold text-gray-800 flex items-center">
                   <Mail className="w-5 h-5 mr-2" />
-                  Your Mail
+                  Your Letters
                 </h3>
               </div>
               <div className="max-h-96 overflow-y-auto">
-                {userMails.length === 0 ? (
+                {userLetters.length === 0 ? (
                   <div className="p-6 text-center text-gray-500">
                     <Mail className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                    <p>No mail yet. Your mail will appear here once uploaded.</p>
+                    <p>No letters yet. Letters will appear here once added by admin.</p>
                   </div>
                 ) : (
                   <div className="divide-y divide-gray-200">
-                    {userMails.map((mail) => (
-                      <div key={mail.id} className="p-4 hover:bg-gray-100 transition-colors">
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <h4 className="font-medium text-gray-800">{mail.title}</h4>
-                              {mail.status === "unread" && (
-                                <span className="px-2 py-1 text-xs bg-red-100 text-red-800 rounded-full">
-                                  New
+                    {userLetters.map((letter) => {
+                      const status = getLetterStatus(letter);
+                      const StatusIcon = status.icon;
+                      const request = userRequests.find(r => r.letterId === letter.id);
+                      
+                      return (
+                        <div key={letter.id} className="p-4 hover:bg-gray-100 transition-colors">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-medium text-gray-800">
+                                  From: {letter.senderName}
+                                </h4>
+                                <span className={`px-2 py-1 text-xs rounded-full ${status.color}`}>
+                                  <StatusIcon className="w-3 h-3 inline mr-1" />
+                                  {status.text}
                                 </span>
+                              </div>
+                              <p className="text-sm text-gray-600">
+                                To: {letter.receiverName}
+                              </p>
+                              <p className="text-sm text-gray-500">
+                                Received: {formatDate(letter.dateReceived)}
+                              </p>
+                              
+                              {request && (
+                                <div className="mt-2 text-xs text-gray-600">
+                                  <p>Services requested:</p>
+                                  <div className="flex gap-2 mt-1">
+                                    {request.pdfScan && (
+                                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                                        PDF Scan
+                                      </span>
+                                    )}
+                                    {request.delivery && (
+                                      <span className="bg-green-100 text-green-800 px-2 py-1 rounded">
+                                        Delivery
+                                      </span>
+                                    )}
+                                  </div>
+                                  {request.deliveryAddress && (
+                                    <p className="mt-1 text-xs">Address: {request.deliveryAddress}</p>
+                                  )}
+                                </div>
                               )}
                             </div>
-                            <p className="text-sm text-gray-500">
-                              {formatDate(mail.uploadedAt)} • {mail.fileName}
-                            </p>
-                          </div>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => handleViewMail(mail)}
-                              className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
-                              title="View PDF"
-                            >
-                              <Eye className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleDownloadMail(mail)}
-                              className="p-2 text-green-600 hover:bg-green-100 rounded-lg transition-colors"
-                              title="Download PDF"
-                            >
-                              <Download className="w-4 h-4" />
-                            </button>
+                            
+                            <div className="flex gap-2">
+                              {request?.status === "completed" && request.pdfScan && letter.adminActions?.pdfUrl && (
+                                <button
+                                  onClick={() => window.open(letter.adminActions?.pdfUrl, '_blank')}
+                                  className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
+                                  title="View PDF"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </button>
+                              )}
+                              
+                              {request?.status === "completed" && request.pdfScan && letter.adminActions?.pdfUrl && (
+                                <a
+                                  href={letter.adminActions.pdfUrl}
+                                  download
+                                  className="p-2 text-green-600 hover:bg-green-100 rounded-lg transition-colors"
+                                  title="Download PDF"
+                                >
+                                  <Download className="w-4 h-4" />
+                                </a>
+                              )}
+                              
+                              {canMakeRequest(letter) && (
+                                <button
+                                  onClick={() => handleMakeRequest(letter)}
+                                  className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
+                                >
+                                  Request Service
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
             </div>
 
-            {/* PDF Viewer */}
             <div className="lg:col-span-1 bg-white border border-gray-200 rounded-lg shadow-sm">
               <div className="p-4 border-b border-gray-200">
                 <h3 className="text-lg font-semibold text-gray-800 flex items-center">
@@ -228,31 +469,37 @@ const MailScannerDashboard = ({ userData, userMails, onMarkAsRead }: {
                 </h3>
               </div>
               <div className="p-4">
-                {selectedMail ? (
+                {selectedLetter && selectedLetter.adminActions?.pdfUrl ? (
                   <div className="space-y-4">
                     <div>
-                      <h4 className="font-medium text-gray-800">{selectedMail.title}</h4>
-                      <p className="text-sm text-gray-500">{selectedMail.fileName}</p>
+                      <h4 className="font-medium text-gray-800">
+                        {selectedLetter.senderName} → {selectedLetter.receiverName}
+                      </h4>
+                      <p className="text-sm text-gray-500">
+                        {formatDate(selectedLetter.dateReceived)}
+                      </p>
                     </div>
                     <div className="border rounded-lg overflow-hidden" style={{ height: '400px' }}>
                       <iframe
-                        src={selectedMail.fileUrl}
+                        src={selectedLetter.adminActions.pdfUrl}
                         className="w-full h-full"
-                        title={selectedMail.title}
+                        title="Letter PDF"
                       />
                     </div>
-                    <button
-                      onClick={() => handleDownloadMail(selectedMail)}
+                    <a
+                      href={selectedLetter.adminActions.pdfUrl}
+                      download
                       className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center"
                     >
                       <Download className="w-4 h-4 mr-2" />
                       Download PDF
-                    </button>
+                    </a>
                   </div>
                 ) : (
                   <div className="text-center text-gray-500 py-8">
                     <FileText className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                    <p>Select a mail to view the PDF</p>
+                    <p>No PDF available to view</p>
+                    <p className="text-sm mt-2">Request a PDF scan for your letters</p>
                   </div>
                 )}
               </div>
@@ -260,6 +507,18 @@ const MailScannerDashboard = ({ userData, userMails, onMarkAsRead }: {
           </div>
         </div>
       </div>
+
+      {showRequestModal && selectedLetterForRequest && (
+        <LetterRequestModal
+          letter={selectedLetterForRequest}
+          onClose={() => {
+            setShowRequestModal(false);
+            setSelectedLetterForRequest(null);
+          }}
+          onSubmit={handleSubmitRequest}
+          userCredits={userData?.credits || 0}
+        />
+      )}
     </div>
   );
 };
@@ -268,9 +527,12 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
   const [userData, setUserData] = useState<any>(null);
-  const [userMails, setUserMails] = useState<Mail[]>([]);
+  const [userLetters, setUserLetters] = useState<Letter[]>([]);
+  const [userRequests, setUserRequests] = useState<UserRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null); // <-- add this line
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     const auth = getAuth(app);
@@ -289,22 +551,41 @@ export default function DashboardPage() {
             setUserData(userDoc.data());
           }
 
-          // Fetch user's mail with better error handling
-          const mailCollection = collection(db, "users", firebaseUser.uid, "mails");
-          const mailQuery = query(mailCollection, orderBy("uploadedAt", "desc"));
-          const mailSnapshot = await getDocs(mailQuery);
+          // Fetch user's letters
+          const lettersQuery = query(
+            collection(db, "letters"),
+            where("userId", "==", firebaseUser.uid),
+            orderBy("dateReceived", "desc")
+          );
+          const lettersSnapshot = await getDocs(lettersQuery);
           
-          const mails = mailSnapshot.docs.map(doc => ({
+          const letters = lettersSnapshot.docs.map(doc => ({
             id: doc.id,
             ...doc.data()
-          })) as Mail[];
+          })) as Letter[];
           
-          setUserMails(mails);
+          setUserLetters(letters);
+
+          // Fetch user's requests
+          const requestsQuery = query(
+            collection(db, "letterRequests"),
+            where("userId", "==", firebaseUser.uid),
+            orderBy("requestedAt", "desc")
+          );
+          const requestsSnapshot = await getDocs(requestsQuery);
+          
+          const requests = requestsSnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data(),
+            requestedAt: doc.data().requestedAt?.toDate()
+          })) as UserRequest[];
+          
+          setUserRequests(requests);
+          
           setError(null);
         } catch (error: any) {
           console.error("Error fetching data:", error);
           setError(error.message);
-          setUserMails([]);
         }
       }
       setLoading(false);
@@ -313,27 +594,137 @@ export default function DashboardPage() {
     return () => unsubscribe();
   }, [router]);
 
-  const handleMarkAsRead = async (mailId: string) => {
-    if (!user) return;
+  // Refetch user data if payment was successful (subscription or credits)
+  useEffect(() => {
+    const successType = searchParams?.get("success");
+    if (successType === "subscription" || successType === "credits") {
+      setSuccessMessage(
+        successType === "subscription"
+          ? "Subscription upgraded successfully!"
+          : "Credits purchased successfully!"
+      );
+      // Refetch user data from Firestore
+      const fetchUserData = async () => {
+        if (!user) return;
+        const db = getFirestore(app);
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        if (userDoc.exists()) {
+          setUserData(userDoc.data());
+        }
+      };
+      fetchUserData();
+      // Remove the query param from the URL after a short delay
+      setTimeout(() => {
+        setSuccessMessage(null);
+        router.replace("/dashboard");
+      }, 2500);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, user]);
+
+  const handleMakeRequest = async (letterId: string, requests: { pdfScan: boolean; delivery: boolean; deliveryAddress?: string }) => {
+    if (!user || !userData) return;
     
     try {
       const db = getFirestore(app);
-      const mailRef = doc(db, "users", user.uid, "mails", mailId);
+      const creditsNeeded = (requests.pdfScan ? 1 : 0) + (requests.delivery ? 1 : 0);
       
-      // Update Firestore document
-      await updateDoc(mailRef, { status: "read" });
-      console.log(`Mail ${mailId} marked as read in Firestore`);
-      
-      // Update local state immediately
-      setUserMails(prev => {
-        const updated = prev.map(mail => 
-          mail.id === mailId ? { ...mail, status: "read" as const } : mail
-        );
-        console.log(`Local state updated for mail ${mailId}`);
-        return updated;
+      if (userData.credits < creditsNeeded) {
+        alert("Insufficient credits");
+        return;
+      }
+
+      // Find the letter
+      const letter = userLetters.find(l => l.id === letterId);
+      if (!letter) {
+        alert("Letter not found");
+        return;
+      }
+
+      // Use a transaction to ensure data consistency
+      await runTransaction(db, async (transaction) => {
+        // Get references
+        const userRef = doc(db, "users", user.uid);
+        const letterRef = doc(db, "letters", letterId);
+        const requestRef = doc(collection(db, "letterRequests"));
+
+        // Read current user data
+        const userDoc = await transaction.get(userRef);
+        if (!userDoc.exists()) {
+          throw new Error("User document not found");
+        }
+
+        const currentCredits = userDoc.data().credits || 0;
+        if (currentCredits < creditsNeeded) {
+          throw new Error("Insufficient credits");
+        }
+
+        // Create the request data
+        const requestData: any = {
+          letterId,
+          userId: user.uid,
+          userName: userData.name || user.email,
+          userEmail: user.email,
+          senderName: letter.senderName,
+          receiverName: letter.receiverName,
+          pdfScan: requests.pdfScan,
+          delivery: requests.delivery,
+          requestedAt: Timestamp.now(),
+          creditsDeducted: creditsNeeded,
+          status: "pending"
+        };
+
+        // Only add deliveryAddress if it exists
+        if (requests.delivery && requests.deliveryAddress) {
+          requestData.deliveryAddress = requests.deliveryAddress;
+        }
+
+        // Create the letter request
+        transaction.set(requestRef, requestData);
+
+        // Update user's credits
+        transaction.update(userRef, {
+          credits: currentCredits - creditsNeeded
+        });
+
+        // Update letter with user request info
+        const letterUpdateData: any = {
+          "userRequests": {
+            pdfScan: requests.pdfScan,
+            delivery: requests.delivery,
+            requestedAt: Timestamp.now(),
+            creditsDeducted: creditsNeeded
+          },
+          status: "processing"
+        };
+
+        // Only add deliveryAddress if it exists
+        if (requests.delivery && requests.deliveryAddress) {
+          letterUpdateData.userRequests.deliveryAddress = requests.deliveryAddress;
+        }
+
+        transaction.update(letterRef, letterUpdateData);
       });
-    } catch (error) {
-      console.error("Error marking mail as read:", error);
+
+      // Show success message in the page
+      setSuccessMessage("Request submitted successfully!");
+      setTimeout(() => {
+        setSuccessMessage(null);
+        // Instead of reload, refetch user data to update credits
+        const fetchUserData = async () => {
+          if (!user) return;
+          const db = getFirestore(app);
+          const userDoc = await getDoc(doc(db, "users", user.uid));
+          if (userDoc.exists()) {
+            setUserData(userDoc.data());
+          }
+        };
+        fetchUserData();
+      }, 2000);
+      
+    } catch (error: any) {
+      console.error("Error making request:", error);
+      alert("Error making request: " + error.message);
     }
   };
 
@@ -354,8 +745,8 @@ export default function DashboardPage() {
         <div className="text-center">
           <div className="text-red-600 mb-4">
             <Shield className="w-12 h-12 mx-auto mb-2" />
-            <h3 className="text-lg font-semibold">Permission Error</h3>
-            <p className="text-sm">Unable to access your mail data.</p>
+            <h3 className="text-lg font-semibold">Error Loading Data</h3>
+            <p className="text-sm">Unable to load your dashboard data.</p>
             <p className="text-xs text-gray-500 mt-2">Error: {error}</p>
           </div>
           <button 
@@ -373,5 +764,22 @@ export default function DashboardPage() {
     return null;
   }
 
-  return <MailScannerDashboard userData={userData} userMails={userMails} onMarkAsRead={handleMarkAsRead} />;
+  return (
+    <>
+      {successMessage && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50">
+          <div className="bg-green-600 text-white px-6 py-3 rounded shadow-lg flex items-center gap-2">
+            <CheckCircle className="w-5 h-5" />
+            <span>{successMessage}</span>
+          </div>
+        </div>
+      )}
+      <MailScannerDashboard
+        userData={userData}
+        userLetters={userLetters}
+        userRequests={userRequests}
+        onMakeRequest={handleMakeRequest}
+      />
+    </>
+  );
 }

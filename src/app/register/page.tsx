@@ -30,7 +30,7 @@ export default function RegisterPage() {
         role: "customer",
         planType: "free",
         subscriptionEndDate: new Date("2100-01-01"), // January 1, 2100
-        credits: 5,
+        credits: 0,
         createdAt: new Date()
       });
       // Registration successful, redirect to dashboard
