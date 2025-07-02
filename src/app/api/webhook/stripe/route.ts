@@ -181,6 +181,11 @@ export async function POST(request: NextRequest) {
 
 // Handle new subscription
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
+  if (session.metadata?.type === "credits") {
+    await handleCreditPurchase(session);
+    return;
+  }
+
   if (!session.subscription || !session.metadata?.userId) {
     throw new Error("Missing subscription or user ID in session");
   }
@@ -196,14 +201,14 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
   await setDoc(userRef, {
     planType: planConfig.planType,
-    credits: 25, // Changed from currentCredits + INITIAL_FREE_CREDITS
+    credits: 25,
     stripeSubscriptionId: subscription.id,
     stripeCustomerId: subscription.customer,
     subscriptionStart: Timestamp.now(),
     lastMonthlyCredit: Timestamp.now(),
     creditHistory: arrayUnion({
       date: Timestamp.now(),
-      credits: 25, // Changed from INITIAL_FREE_CREDITS
+      credits: 25,
       type: "initial"
     }),
     updatedAt: Timestamp.now()
@@ -212,8 +217,37 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   logEvent("SubscriptionCreated", { 
     userId: userId, 
     plan: planConfig.name,
-    initialCredits: 25 // Changed from INITIAL_FREE_CREDITS
+    initialCredits: 25
   });
+}
+
+async function handleCreditPurchase(session: Stripe.Checkout.Session) {
+  if (!session.metadata?.userId || !session.metadata?.credits || session.metadata?.type !== "credits") {
+    throw new Error("Missing required metadata for credit purchase");
+  }
+
+  const userId = session.metadata.userId;
+  const credits = parseInt(session.metadata.credits, 10);
+  const userRef = doc(db, "users", userId);
+
+  await runTransaction(db, async (transaction) => {
+    const userDoc = await transaction.get(userRef);
+    if (!userDoc.exists()) {
+      throw new Error(`User not found: ${userId}`);
+    }
+
+    transaction.update(userRef, {
+      credits: increment(credits),
+      creditHistory: arrayUnion({
+        date: Timestamp.now(),
+        credits,
+        type: "purchased"
+      }),
+      updatedAt: Timestamp.now()
+    });
+  });
+
+  logEvent("CreditsPurchased", { userId, credits });
 }
 
 // Handle recurring payments

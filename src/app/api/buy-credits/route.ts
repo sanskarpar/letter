@@ -14,6 +14,14 @@ const stripe = new Stripe(stripeSecretKey, {
 
 const db = getFirestore(app);
 
+// Credit packages (must match frontend)
+const CREDIT_PACKAGES = [
+  { credits: 5, price: 1 },
+  { credits: 25, price: 5 },
+  { credits: 50, price: 9 },
+  { credits: 100, price: 17 },
+];
+
 export async function POST(request: NextRequest) {
   try {
     const { credits, price, userId, userEmail } = await request.json();
@@ -25,21 +33,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate credit package (€1 for 5 credits ratio)
-    const expectedPrice = Math.ceil(credits / 5);
-    if (price !== expectedPrice) {
+    // Validate credit package
+    const packageConfig = CREDIT_PACKAGES.find(
+      (pkg) => pkg.credits === credits && pkg.price === price
+    );
+    if (!packageConfig) {
       return NextResponse.json(
-        { error: "Invalid credit package pricing" },
+        { error: "Invalid credit package" },
         { status: 400 }
       );
     }
 
     // Get or create Stripe customer
     let stripeCustomerId: string;
-    
     const userDoc = await getDoc(doc(db, "users", userId));
     const userData = userDoc.data();
-    
+
     if (userData?.stripeCustomerId) {
       stripeCustomerId = userData.stripeCustomerId;
     } else {
@@ -50,11 +59,12 @@ export async function POST(request: NextRequest) {
         },
       });
       stripeCustomerId = customer.id;
-      
-      await setDoc(doc(db, "users", userId), {
-        ...userData,
-        stripeCustomerId: customer.id,
-      }, { merge: true });
+
+      await setDoc(
+        doc(db, "users", userId),
+        { stripeCustomerId: customer.id },
+        { merge: true }
+      );
     }
 
     // Create Stripe checkout session for one-time payment
