@@ -89,18 +89,13 @@ export async function POST(request: NextRequest) {
         },
       ],
       mode: "subscription",
-      success_url: `${baseUrl}/dashboard?success=subscription&session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${baseUrl}/dashboard?success=subscription`,
       cancel_url: `${baseUrl}/payments?canceled=true`,
       metadata: {
         userId,
         planId,
-        type: "subscription" // Important for webhook handler
+        userEmail,
       },
-      subscription_data: {
-        metadata: {
-          userId // Also include in subscription metadata
-        }
-      }
     });
 
     return NextResponse.json({ sessionId: session.id });
