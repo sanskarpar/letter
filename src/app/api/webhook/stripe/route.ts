@@ -117,7 +117,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
 async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
   console.log("Handling subscription created:", subscription.id);
-  
+
   // Get userId from multiple possible sources
   let userId = subscription.metadata?.userId;
   if (!userId) {
@@ -143,7 +143,7 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
 
     const planType = getPlanTypeFromPriceId(priceId);
     const currentPeriodEnd = (subscription as any).current_period_end;
-    
+
     if (!currentPeriodEnd) {
       console.error("No current_period_end in subscription");
       return;
@@ -155,7 +155,9 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
       subscriptionEndDate,
       stripeSubscriptionId: subscription.id,
       stripeCustomerId: subscription.customer as string,
-      credits: increment(25) // Initial signup bonus
+      status: subscription.status,
+      // Only give signup bonus if this is a new subscription (not an update)
+      ...(subscription.status === "active" && { credits: increment(25) })
     };
 
     // Add trial end date if this is a trial
@@ -165,7 +167,7 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
 
     await updateDoc(doc(db, "users", userId), updateData, { merge: true });
 
-    console.log(`Successfully updated user ${userId} with new subscription`);
+    console.log(`Successfully updated user ${userId} with new subscription`, updateData);
   } catch (error) {
     console.error("Error in subscription created handler:", error);
   }
@@ -173,7 +175,7 @@ async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
 
 async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
   console.log("Handling subscription updated:", subscription.id);
-  
+
   let userId = subscription.metadata?.userId;
   if (!userId) {
     const fetchedUserId = await getUserIdFromCustomerId(subscription.customer as string);
@@ -198,7 +200,7 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
 
     const planType = getPlanTypeFromPriceId(priceId);
     const currentPeriodEnd = (subscription as any).current_period_end;
-    
+
     if (!currentPeriodEnd) {
       console.error("No current_period_end in subscription");
       return;
@@ -208,6 +210,7 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
       planType,
       subscriptionEndDate: Timestamp.fromMillis(currentPeriodEnd * 1000),
       stripeSubscriptionId: subscription.id,
+      stripeCustomerId: subscription.customer as string,
       status: subscription.status
     };
 
@@ -218,7 +221,7 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
 
     await updateDoc(doc(db, "users", userId), updateData, { merge: true });
 
-    console.log(`Successfully updated user ${userId} subscription data`);
+    console.log(`Successfully updated user ${userId} subscription data`, updateData);
   } catch (error) {
     console.error("Error in subscription updated handler:", error);
   }
