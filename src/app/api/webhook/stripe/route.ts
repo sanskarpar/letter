@@ -1,7 +1,7 @@
 // app/api/webhooks/stripe/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { getFirestore, doc, updateDoc, getDoc, collection, query, where, getDocs, setDoc } from "firebase/firestore";
+import { getFirestore, doc, updateDoc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { app } from "@/firebase/config";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -10,7 +10,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 
 const db = getFirestore(app);
 
-// Plan configurations with monthly credit allocation
+// Plan configurations with proper credit system
 function getPlanConfig(priceId: string) {
   const configs: { [key: string]: any } = {};
   
@@ -18,7 +18,7 @@ function getPlanConfig(priceId: string) {
   if (process.env.STRIPE_MONTHLY_PRICE_ID) {
     configs[process.env.STRIPE_MONTHLY_PRICE_ID] = {
       planType: "premium",
-      monthlyCredits: 25, // Credits given each month
+      credits: 25, // 5 free + 20 bonus credits
       durationMonths: 1,
       name: "Monthly Premium",
       freeCredits: 5,
@@ -26,27 +26,27 @@ function getPlanConfig(priceId: string) {
     };
   }
   
-  // Semi-annual plan: 25 credits per month for 6 months
+  // Semi-annual plan: (5 free + 20 bonus) × 6 months = 150 credits
   if (process.env.STRIPE_SEMIANNUAL_PRICE_ID) {
     configs[process.env.STRIPE_SEMIANNUAL_PRICE_ID] = {
       planType: "premium",
-      monthlyCredits: 25, // Credits given each month
+      credits: 150, // 25 credits × 6 months
       durationMonths: 6,
       name: "Semi-Annual Premium",
-      freeCredits: 5,
-      bonusCredits: 20
+      freeCredits: 30, // 5 × 6 months
+      bonusCredits: 120 // 20 × 6 months
     };
   }
   
-  // Annual plan: 25 credits per month for 12 months
+  // Annual plan: (5 free + 20 bonus) × 12 months = 300 credits
   if (process.env.STRIPE_ANNUAL_PRICE_ID) {
     configs[process.env.STRIPE_ANNUAL_PRICE_ID] = {
       planType: "premium",
-      monthlyCredits: 25, // Credits given each month
+      credits: 300, // 25 credits × 12 months
       durationMonths: 12,
       name: "Annual Premium",
-      freeCredits: 5,
-      bonusCredits: 20
+      freeCredits: 60, // 5 × 12 months
+      bonusCredits: 240 // 20 × 12 months
     };
   }
   
@@ -54,84 +54,6 @@ function getPlanConfig(priceId: string) {
   console.log("🔍 Looking for price ID:", priceId);
   
   return configs[priceId] || null;
-}
-
-// Enhanced Firestore update method with fallback and retry logic
-async function updateFirestoreDocument(userRef: any, updateData: any, userId: string, operationType: string = "update"): Promise<boolean> {
-  const maxRetries = 3;
-  let lastError: any = null;
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`🔄 Attempt ${attempt}/${maxRetries}: Executing Firestore ${operationType} for user ${userId}`);
-      console.log("📝 Update data:", JSON.stringify(updateData, null, 2));
-
-      try {
-        // First, try updateDoc
-        await updateDoc(userRef, updateData);
-        console.log("✅ Firestore updateDoc completed successfully");
-      } catch (updateError: any) {
-        console.warn(`⚠️ updateDoc failed on attempt ${attempt}:`, updateError.message);
-        console.warn("🔄 Falling back to setDoc with merge option...");
-        
-        // Fallback to setDoc with merge
-        await setDoc(userRef, updateData, { merge: true });
-        console.log("✅ Firestore setDoc with merge completed successfully");
-      }
-
-      // Wait for Firestore eventual consistency
-      console.log("⏳ Waiting for Firestore consistency...");
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      // Verify the update
-      const verificationDoc = await getDoc(userRef);
-      if (!verificationDoc.exists()) {
-        throw new Error("Document verification failed: document does not exist");
-      }
-
-      interface UserData {
-        planType?: string;
-        credits?: number;
-        subscriptionEndDate?: any;
-        nextCreditAllocationDate?: any;
-        stripeSubscriptionId?: string;
-        updatedAt?: any;
-      }
-      const verifiedData = verificationDoc.data() as UserData;
-      console.log("🔍 Verification successful - Document data:", {
-        planType: verifiedData?.planType,
-        credits: verifiedData?.credits,
-        subscriptionEndDate: verifiedData?.subscriptionEndDate?.toDate?.() || verifiedData?.subscriptionEndDate,
-        nextCreditAllocationDate: verifiedData?.nextCreditAllocationDate?.toDate?.() || verifiedData?.nextCreditAllocationDate,
-        stripeSubscriptionId: verifiedData?.stripeSubscriptionId,
-        updatedAt: verifiedData?.updatedAt?.toDate?.() || verifiedData?.updatedAt
-      });
-
-      // Verify critical fields were updated
-      if (updateData.credits && verifiedData?.credits !== updateData.credits) {
-        throw new Error(`Credit verification failed: expected ${updateData.credits}, got ${verifiedData?.credits}`);
-      }
-      if (updateData.planType && verifiedData?.planType !== updateData.planType) {
-        throw new Error(`Plan type verification failed: expected ${updateData.planType}, got ${verifiedData?.planType}`);
-      }
-
-      console.log(`✅ Firestore ${operationType} and verification completed successfully on attempt ${attempt}`);
-      return true;
-
-    } catch (error: any) {
-      lastError = error;
-      console.error(`💥 Attempt ${attempt}/${maxRetries} failed:`, error.message);
-      
-      if (attempt < maxRetries) {
-        const delay = attempt * 2000; // Exponential backoff: 2s, 4s, 6s
-        console.log(`⏳ Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  console.error(`💥 All ${maxRetries} attempts failed for Firestore ${operationType}`);
-  throw lastError;
 }
 
 export async function POST(request: NextRequest) {
@@ -224,7 +146,7 @@ export async function POST(request: NextRequest) {
           subscriptionId: (invoice as any).subscription as string,
         });
 
-        // Handle recurring subscription payments (monthly credit allocation)
+        // Handle recurring subscription payments
         if ((invoice as any).subscription) {
           await handleSubscriptionRenewal(invoice);
         }
@@ -276,15 +198,13 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
     console.log("🔍 Retrieving subscription:", subscriptionId);
     const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
       expand: ['items.data.price']
-    }) as Stripe.Subscription;
+    });
     
     console.log("📋 Retrieved subscription:", {
       id: subscription.id,
       status: subscription.status,
       items: subscription.items.data.length,
       customer: subscription.customer,
-      current_period_start: (subscription as any).current_period_start,
-      current_period_end: (subscription as any).current_period_end,
     });
 
     if (subscription.items.data.length === 0) {
@@ -296,6 +216,11 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
     const priceId = lineItem.price.id;
     
     console.log("💲 Price ID from subscription:", priceId);
+    console.log("💲 Available environment variables:", {
+      monthly: process.env.STRIPE_MONTHLY_PRICE_ID ? "SET" : "NOT SET",
+      semiannual: process.env.STRIPE_SEMIANNUAL_PRICE_ID ? "SET" : "NOT SET",
+      annual: process.env.STRIPE_ANNUAL_PRICE_ID ? "SET" : "NOT SET"
+    });
     
     const planConfig = getPlanConfig(priceId);
     if (!planConfig) {
@@ -310,21 +235,13 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
 
     console.log("✅ Plan config found:", planConfig);
 
-    // Calculate subscription end date based on the plan duration
-    const subscriptionEndDate = new Date((subscription as any).current_period_end * 1000);
-    
-    // For multi-month plans, calculate the actual end date
-    if (planConfig.durationMonths > 1) {
-      const startDate = new Date((subscription as any)["current_period_start"] * 1000);
-      subscriptionEndDate.setMonth(startDate.getMonth() + planConfig.durationMonths);
-    }
+    // Calculate subscription end date
+    const subscriptionEndDate = new Date();
+    subscriptionEndDate.setMonth(subscriptionEndDate.getMonth() + planConfig.durationMonths);
 
     console.log("📅 Calculated subscription end date:", subscriptionEndDate.toISOString());
 
-    // Calculate next credit allocation date (monthly)
-    const nextCreditDate = new Date((subscription as any).current_period_end * 1000);
-
-    // Get current user data
+    // Get current user data with retry mechanism
     const userRef = doc(db, "users", userId);
     console.log("🔍 Getting user document for:", userId);
     
@@ -345,7 +262,7 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       currentCustomerId: currentUserData?.stripeCustomerId,
     });
 
-    // Store the customer ID in Stripe customer metadata for future reference
+    // CRITICAL: Store the customer ID in Stripe customer metadata for future reference
     if (subscription.customer && typeof subscription.customer === 'string') {
       try {
         console.log("🔄 Updating Stripe customer metadata...");
@@ -360,52 +277,112 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       }
     }
 
-    // FIXED: Only give monthly credits (25), not the full plan amount
+    // FIXED: Use proper Firestore field updates with explicit types
     const updateData: any = {
       planType: planConfig.planType,
-      credits: currentCredits + planConfig.monthlyCredits, // Only monthly credits
+      credits: currentCredits + planConfig.credits,
       subscriptionEndDate: subscriptionEndDate,
-      nextCreditAllocationDate: nextCreditDate, // Track when next credits should be given
       stripeSubscriptionId: subscription.id,
       stripeCustomerId: subscription.customer,
-      subscriptionPlan: {
-        name: planConfig.name,
-        durationMonths: planConfig.durationMonths,
-        monthlyCredits: planConfig.monthlyCredits,
-        freeCredits: planConfig.freeCredits,
-        bonusCredits: planConfig.bonusCredits
-      },
       updatedAt: new Date(),
       // Track credit breakdown for transparency
       lastCreditGrant: {
         date: new Date(),
         freeCredits: planConfig.freeCredits,
         bonusCredits: planConfig.bonusCredits,
-        totalCredits: planConfig.monthlyCredits, // Monthly credits only
-        planName: planConfig.name,
-        type: 'initial_purchase'
+        totalCredits: planConfig.credits,
+        planName: planConfig.name
       }
     };
 
+    console.log("📝 Preparing to update user with data:", updateData);
     console.log("📝 Credit breakdown:", {
       previousCredits: currentCredits,
-      monthlyFreeCredits: planConfig.freeCredits,
-      monthlyBonusCredits: planConfig.bonusCredits,
-      monthlyTotalCredits: planConfig.monthlyCredits,
-      newTotalCredits: currentCredits + planConfig.monthlyCredits,
-      planDuration: `${planConfig.durationMonths} months`,
-      nextCreditDate: nextCreditDate.toISOString()
+      freeCreditsAdded: planConfig.freeCredits,
+      bonusCreditsAdded: planConfig.bonusCredits,
+      totalCreditsAdded: planConfig.credits,
+      newTotalCredits: currentCredits + planConfig.credits
     });
+    console.log("📝 User reference path:", userRef.path);
 
-    // Use enhanced update method with retry logic
-    await updateFirestoreDocument(userRef, updateData, userId, "subscription_purchase");
+    // FIXED: Use setDoc with merge option instead of updateDoc to handle missing fields
+    console.log("🔄 Executing Firestore update with merge...");
+    
+    try {
+      // First, try updateDoc
+      await updateDoc(userRef, updateData);
+      console.log("✅ Firestore updateDoc completed successfully");
+    } catch (updateError: any) {
+      console.warn("⚠️ updateDoc failed, trying setDoc with merge:", updateError.message);
+      
+      // Fallback: Use setDoc with merge to handle any field issues
+      const { setDoc } = await import("firebase/firestore");
+      await setDoc(userRef, updateData, { merge: true });
+      console.log("✅ Firestore setDoc with merge completed successfully");
+    }
+
+    // FIXED: Add delay and retry mechanism for verification
+    console.log("⏳ Waiting 1 second before verification...");
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Verify the update by reading the document again with retry
+    let retryCount = 0;
+    const maxRetries = 3;
+    let verificationSuccessful = false;
+
+    while (retryCount < maxRetries && !verificationSuccessful) {
+      try {
+        const updatedUserDoc = await getDoc(userRef);
+        if (updatedUserDoc.exists()) {
+          const updatedData = updatedUserDoc.data();
+          console.log(`🔍 Verification attempt ${retryCount + 1} - Updated user data:`, {
+            planType: updatedData?.planType,
+            credits: updatedData?.credits,
+            stripeSubscriptionId: updatedData?.stripeSubscriptionId,
+            subscriptionEndDate: updatedData?.subscriptionEndDate,
+          });
+
+          // Check if the critical fields were updated
+          if (updatedData?.planType === planConfig.planType && 
+              updatedData?.credits === (currentCredits + planConfig.credits)) {
+            verificationSuccessful = true;
+            console.log("✅ Verification successful - all fields updated correctly");
+          } else {
+            console.warn(`⚠️ Verification failed on attempt ${retryCount + 1}:`, {
+              expectedPlanType: planConfig.planType,
+              actualPlanType: updatedData?.planType,
+              expectedCredits: currentCredits + planConfig.credits,
+              actualCredits: updatedData?.credits
+            });
+          }
+        } else {
+          console.error("❌ User document not found after update - this shouldn't happen");
+        }
+      } catch (verificationError) {
+        console.error(`❌ Verification attempt ${retryCount + 1} failed:`, verificationError);
+      }
+
+      if (!verificationSuccessful && retryCount < maxRetries - 1) {
+        retryCount++;
+        console.log(`⏳ Retrying verification in 2 seconds... (attempt ${retryCount + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } else {
+        break;
+      }
+    }
+
+    if (!verificationSuccessful) {
+      console.error("❌ Failed to verify update after all retries - manual investigation needed");
+      // Don't throw error here to avoid webhook failure, but log for investigation
+    }
 
     console.log(`✅ Successfully processed subscription for user ${userId}:`, {
       planType: planConfig.planType,
-      monthlyCreditsAdded: planConfig.monthlyCredits,
-      newTotalCredits: currentCredits + planConfig.monthlyCredits,
+      freeCreditsAdded: planConfig.freeCredits,
+      bonusCreditsAdded: planConfig.bonusCredits,
+      totalCreditsAdded: planConfig.credits,
+      newTotalCredits: currentCredits + planConfig.credits,
       subscriptionEndDate: subscriptionEndDate.toISOString(),
-      nextCreditAllocation: nextCreditDate.toISOString(),
       subscriptionId: subscription.id,
       planDuration: `${planConfig.durationMonths} months`
     });
@@ -458,16 +435,29 @@ async function handleCreditsPurchase(session: Stripe.Checkout.Session, userId: s
     const updateData: any = {
       credits: currentCredits + creditsToAdd,
       updatedAt: new Date(),
-      lastCreditGrant: {
-        date: new Date(),
-        totalCredits: creditsToAdd,
-        type: 'one_time_purchase',
-        amountPaid: amountPaid
-      }
     };
     
-    // Use enhanced update method with retry logic
-    await updateFirestoreDocument(userRef, updateData, userId, "credits_purchase");
+    console.log("📝 Updating user with credits data:", updateData);
+    
+    // FIXED: Use same approach as subscription purchase
+    try {
+      await updateDoc(userRef, updateData);
+      console.log("✅ Credits updateDoc completed successfully");
+    } catch (updateError: any) {
+      console.warn("⚠️ Credits updateDoc failed, trying setDoc with merge:", updateError.message);
+      
+      const { setDoc } = await import("firebase/firestore");
+      await setDoc(userRef, updateData, { merge: true });
+      console.log("✅ Credits setDoc with merge completed successfully");
+    }
+
+    // Verify the update
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const updatedUserDoc = await getDoc(userRef);
+    if (updatedUserDoc.exists()) {
+      const updatedData = updatedUserDoc.data();
+      console.log("🔍 Verification - Updated credits:", updatedData?.credits);
+    }
 
     console.log(`✅ Added ${creditsToAdd} credits to user ${userId}. Total: ${currentCredits + creditsToAdd}`);
 
@@ -540,8 +530,9 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
       throw new Error(`Unknown price ID for renewal: ${priceId}`);
     }
 
-    // Calculate next credit allocation date
-    const nextCreditDate = new Date((subscription as any).current_period_end * 1000);
+    // Extend subscription and add credits based on the plan
+    const subscriptionEndDate = new Date();
+    subscriptionEndDate.setMonth(subscriptionEndDate.getMonth() + planConfig.durationMonths);
 
     const userRef = doc(db, "users", userId);
     const userDoc = await getDoc(userRef);
@@ -554,29 +545,39 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
     const currentUserData = userDoc.data();
     const currentCredits = currentUserData?.credits || 0;
 
-    // FIXED: Only add monthly credits on renewal, not full plan amount
     const renewalUpdateData: any = {
-      credits: currentCredits + planConfig.monthlyCredits, // Monthly credits only
-      nextCreditAllocationDate: nextCreditDate, // Update next allocation date
+      credits: currentCredits + planConfig.credits,
+      subscriptionEndDate: subscriptionEndDate,
       updatedAt: new Date(),
       lastCreditGrant: {
         date: new Date(),
         freeCredits: planConfig.freeCredits,
         bonusCredits: planConfig.bonusCredits,
-        totalCredits: planConfig.monthlyCredits, // Monthly credits only
+        totalCredits: planConfig.credits,
         planName: planConfig.name,
-        type: 'monthly_renewal'
+        type: 'renewal'
       }
     };
 
-    // Use enhanced update method with retry logic
-    await updateFirestoreDocument(userRef, renewalUpdateData, userId, "subscription_renewal");
+    // FIXED: Use same approach as subscription purchase
+    try {
+      await updateDoc(userRef, renewalUpdateData);
+      console.log("✅ Renewal updateDoc completed successfully");
+    } catch (updateError: any) {
+      console.warn("⚠️ Renewal updateDoc failed, trying setDoc with merge:", updateError.message);
+      
+      const { setDoc } = await import("firebase/firestore");
+      await setDoc(userRef, renewalUpdateData, { merge: true });
+      console.log("✅ Renewal setDoc with merge completed successfully");
+    }
 
     console.log(`✅ Renewed subscription for user ${userId}:`, {
-      monthlyCreditsAdded: planConfig.monthlyCredits,
-      newTotalCredits: currentCredits + planConfig.monthlyCredits,
-      nextCreditAllocation: nextCreditDate.toISOString(),
-      planName: planConfig.name
+      freeCreditsAdded: planConfig.freeCredits,
+      bonusCreditsAdded: planConfig.bonusCredits,
+      totalCreditsAdded: planConfig.credits,
+      newTotalCredits: currentCredits + planConfig.credits,
+      planDuration: `${planConfig.durationMonths} months`,
+      newEndDate: subscriptionEndDate.toISOString()
     });
 
   } catch (error) {
@@ -621,13 +622,20 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
         planType: "free",
         stripeSubscriptionId: null,
         subscriptionEndDate: null,
-        nextCreditAllocationDate: null, // Remove scheduled credit allocations
-        subscriptionPlan: null, // Clear subscription plan details
         updatedAt: new Date(),
       };
 
-      // Use enhanced update method with retry logic
-      await updateFirestoreDocument(userRef, downgradeData, userId, "subscription_downgrade");
+      // FIXED: Use same approach as other functions
+      try {
+        await updateDoc(userRef, downgradeData);
+        console.log("✅ Downgrade updateDoc completed successfully");
+      } catch (updateError: any) {
+        console.warn("⚠️ Downgrade updateDoc failed, trying setDoc with merge:", updateError.message);
+        
+        const { setDoc } = await import("firebase/firestore");
+        await setDoc(userRef, downgradeData, { merge: true });
+        console.log("✅ Downgrade setDoc with merge completed successfully");
+      }
       
       console.log(`⬇️ Downgraded user ${userId} to free plan`);
     } else if (subscription.status === "active") {
@@ -638,8 +646,17 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
         updatedAt: new Date(),
       };
 
-      // Use enhanced update method with retry logic
-      await updateFirestoreDocument(userRef, upgradeData, userId, "subscription_upgrade");
+      // FIXED: Use same approach as other functions
+      try {
+        await updateDoc(userRef, upgradeData);
+        console.log("✅ Upgrade updateDoc completed successfully");
+      } catch (updateError: any) {
+        console.warn("⚠️ Upgrade updateDoc failed, trying setDoc with merge:", updateError.message);
+        
+        const { setDoc } = await import("firebase/firestore");
+        await setDoc(userRef, upgradeData, { merge: true });
+        console.log("✅ Upgrade setDoc with merge completed successfully");
+      }
       
       console.log(`⬆️ Activated premium plan for user ${userId}`);
     }
