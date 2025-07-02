@@ -99,7 +99,18 @@ async function checkMonthlyCredits(userId: string) {
     const now = new Date();
     const lastCreditDate = userData.lastMonthlyCredit?.toDate();
     const nextCreditDate = userData.nextCreditDate?.toDate();
-    
+    const subscriptionEnd = userData.subscriptionEnd?.toDate();
+
+    // Check if subscription is still valid
+    if (subscriptionEnd && now >= subscriptionEnd) {
+      logEvent("CreditsSkipped", { 
+        userId, 
+        reason: "Subscription ended",
+        subscriptionEnd: subscriptionEnd.toISOString()
+      });
+      return;
+    }
+
     // If no credits have been given yet, initialize
     if (!lastCreditDate) {
       transaction.update(userRef, {
@@ -197,6 +208,11 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
   if (!planConfig) throw new Error(`Unknown price ID: ${priceId}`);
 
+  // Calculate subscription end date based on plan duration
+  const subscriptionStart = new Date();
+  const subscriptionEnd = new Date(subscriptionStart);
+  subscriptionEnd.setMonth(subscriptionStart.getMonth() + planConfig.durationMonths);
+
   const userRef = doc(db, "users", userId);
 
   await setDoc(userRef, {
@@ -204,7 +220,8 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     credits: 25,
     stripeSubscriptionId: subscription.id,
     stripeCustomerId: subscription.customer,
-    subscriptionStart: Timestamp.now(),
+    subscriptionStart: Timestamp.fromDate(subscriptionStart),
+    subscriptionEnd: Timestamp.fromDate(subscriptionEnd), // Store end date
     lastMonthlyCredit: Timestamp.now(),
     creditHistory: arrayUnion({
       date: Timestamp.now(),
@@ -217,7 +234,8 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   logEvent("SubscriptionCreated", { 
     userId: userId, 
     plan: planConfig.name,
-    initialCredits: 25
+    initialCredits: 25,
+    subscriptionEnd: subscriptionEnd.toISOString()
   });
 }
 
@@ -273,13 +291,17 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       planType: "free",
       stripeSubscriptionId: null,
       nextCreditDate: null,
+      subscriptionEnd: null, // Clear subscription end date
       updatedAt: Timestamp.now()
     });
     logEvent("SubscriptionCancelled", { userId });
   } else if (subscription.status === "active") {
+    // Fetch the subscription to get the current period end
+    const subscriptionEnd = new Date((subscription as any).current_period_end * 1000);
     await updateDoc(userRef, {
       planType: "premium",
       stripeSubscriptionId: subscription.id,
+      subscriptionEnd: Timestamp.fromDate(subscriptionEnd), // Update end date
       updatedAt: Timestamp.now()
     });
     // Check if credits are due after reactivation
