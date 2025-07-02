@@ -11,7 +11,10 @@ import {
   where, 
   getDocs,
   setDoc,
-  runTransaction
+  runTransaction,
+  Timestamp,
+  writeBatch,
+  increment
 } from "firebase/firestore";
 import { initializeApp, getApps } from "firebase/app";
 import { firebaseConfig } from "@/firebase/config";
@@ -24,38 +27,52 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2025-06-30.basil",
 });
 
+// Interfaces
+interface CreditDistribution {
+  id: string;
+  credits: number;
+  distributionDate: Timestamp;
+  status: 'pending' | 'processed' | 'failed';
+  createdAt: Timestamp;
+  processedAt?: Timestamp;
+  idempotencyKey?: string;
+}
+
+interface UserCreditSchedule {
+  monthlyCredits: number;
+  remainingMonths: number;
+  lastDistribution: Timestamp | null;
+}
+
 // Enhanced logging function
 function logEvent(eventName: string, data: any) {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${eventName}:`, JSON.stringify(data, null, 2));
 }
 
-// Plan configurations with proper credit system
+// Plan configurations with monthly credit distribution
 function getPlanConfig(priceId: string) {
   const configs: Record<string, any> = {
     [process.env.STRIPE_MONTHLY_PRICE_ID!]: {
       planType: "premium",
-      credits: 25,
+      monthlyCredits: 20, // Bonus credits per month
+      freeCredits: 5,     // One-time free credits
       durationMonths: 1,
-      name: "Monthly Premium",
-      freeCredits: 5,
-      bonusCredits: 20
+      name: "Monthly Premium"
     },
     [process.env.STRIPE_SEMIANNUAL_PRICE_ID!]: {
       planType: "premium",
-      credits: 150,
+      monthlyCredits: 20, // Same monthly credits as monthly plan
+      freeCredits: 5,     // One-time free credits
       durationMonths: 6,
-      name: "Semi-Annual Premium",
-      freeCredits: 30,
-      bonusCredits: 120
+      name: "Semi-Annual Premium"
     },
     [process.env.STRIPE_ANNUAL_PRICE_ID!]: {
       planType: "premium",
-      credits: 300,
+      monthlyCredits: 20, // Same monthly credits as monthly plan
+      freeCredits: 5,     // One-time free credits
       durationMonths: 12,
-      name: "Annual Premium",
-      freeCredits: 60,
-      bonusCredits: 240
+      name: "Annual Premium"
     }
   };
 
@@ -81,7 +98,7 @@ async function updateUserDocument(userId: string, updateData: any) {
       }
       
       // Add server timestamp
-      updateData.updatedAt = new Date();
+      updateData.updatedAt = Timestamp.now();
       updateData.lastWebhookUpdate = new Date().toISOString();
       
       transaction.update(userRef, updateData);
@@ -110,6 +127,134 @@ async function updateUserDocument(userId: string, updateData: any) {
       throw fallbackError;
     }
   }
+}
+
+// Schedule monthly credit distribution with idempotency
+async function scheduleMonthlyCredits(userId: string, monthlyCredits: number, months: number) {
+  const creditsRef = collection(db, `users/${userId}/scheduledCredits`);
+  const now = new Date();
+  const batch = writeBatch(db);
+  
+  for (let i = 1; i <= months; i++) {
+    const distributionDate = new Date(now);
+    distributionDate.setMonth(distributionDate.getMonth() + i);
+    
+    const distId = `dist_${i}_${distributionDate.getTime()}`;
+    const distDoc = doc(creditsRef, distId);
+    
+    batch.set(distDoc, {
+      id: distId,
+      credits: monthlyCredits,
+      distributionDate: Timestamp.fromDate(distributionDate),
+      status: "pending",
+      createdAt: Timestamp.now(),
+      idempotencyKey: `${userId}_${distributionDate.getTime()}`
+    });
+  }
+  
+  await batch.commit();
+  
+  logEvent("MonthlyCreditsScheduled", {
+    userId,
+    monthlyCredits,
+    months,
+    firstDistribution: new Date(now.setMonth(now.getMonth() + 1)),
+    lastDistribution: new Date(now.setMonth(now.getMonth() + months))
+  });
+}
+
+// Process pending credit distributions
+async function processPendingDistributions(userId: string) {
+  const userRef = doc(db, "users", userId);
+  const creditsRef = collection(db, `users/${userId}/scheduledCredits`);
+  
+  const now = Timestamp.now();
+  const pendingQuery = query(
+    creditsRef,
+    where("status", "==", "pending"),
+    where("distributionDate", "<=", now)
+  );
+  
+  const pendingSnap = await getDocs(pendingQuery);
+  
+  if (pendingSnap.empty) {
+    logEvent("NoPendingDistributions", { userId });
+    return;
+  }
+
+  const userDoc = await getDoc(userRef);
+  if (!userDoc.exists()) {
+    throw new Error(`User document not found: ${userId}`);
+  }
+
+  const userData = userDoc.data();
+  const currentCredits = userData?.credits || 0;
+  const creditSchedule = userData?.creditSchedule as UserCreditSchedule | undefined;
+  
+  if (!creditSchedule) {
+    throw new Error(`No credit schedule found for user: ${userId}`);
+  }
+
+  let totalCreditsToAdd = 0;
+  const batch = writeBatch(db);
+
+  pendingSnap.forEach((doc) => {
+    const dist = doc.data() as CreditDistribution;
+    totalCreditsToAdd += dist.credits;
+    batch.update(doc.ref, {
+      status: "processed",
+      processedAt: now
+    });
+  });
+
+  // Atomic update of credits and distribution status
+  batch.update(userRef, {
+    credits: currentCredits + totalCreditsToAdd,
+    updatedAt: now,
+    "creditSchedule.lastDistribution": now,
+    "creditSchedule.remainingMonths": increment(-pendingSnap.size),
+    lastCreditGrant: {
+      date: now.toDate(),
+      credits: totalCreditsToAdd,
+      type: 'monthly',
+      planName: userData.planType
+    }
+  });
+
+  await batch.commit();
+  
+  logEvent("MonthlyCreditsDistributed", {
+    userId,
+    creditsAdded: totalCreditsToAdd,
+    distributionsProcessed: pendingSnap.size,
+    newTotalCredits: currentCredits + totalCreditsToAdd,
+    remainingMonths: creditSchedule.remainingMonths - pendingSnap.size
+  });
+}
+
+// Get user ID from subscription
+async function getUserIdFromSubscription(subscription: Stripe.Subscription): Promise<string> {
+  // First try customer metadata
+  const customer = await stripe.customers.retrieve(subscription.customer as string);
+  let userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
+  
+  if (userId) return userId;
+
+  // Fallback: Find user by subscription ID
+  const usersRef = collection(db, "users");
+  const q = query(usersRef, where("stripeSubscriptionId", "==", subscription.id));
+  const userQuerySnapshot = await getDocs(q);
+  
+  if (!userQuerySnapshot.empty) {
+    userId = userQuerySnapshot.docs[0].id;
+    // Update customer metadata for future reference
+    await stripe.customers.update(subscription.customer as string, {
+      metadata: { firebaseUserId: userId }
+    });
+    return userId;
+  }
+  
+  throw new Error(`No Firebase user ID found for customer: ${subscription.customer}`);
 }
 
 export async function POST(request: NextRequest) {
@@ -191,7 +336,7 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
   if (session.mode === "subscription" && session.subscription) {
     await handleSubscriptionPurchase(session, userId);
   } else if (session.mode === "payment") {
-    await handleCreditsPurchase(session, userId);
+    logEvent("CreditsPurchaseNotImplemented", { sessionId: session.id, userId });
   }
 }
 
@@ -231,24 +376,38 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       });
     }
 
-    // Prepare update data
+    // Prepare initial update with free credits only
     const updateData = {
       planType: planConfig.planType,
-      credits: currentCredits + planConfig.credits,
+      credits: currentCredits + planConfig.freeCredits, // Only add free credits initially
       subscriptionEndDate,
       stripeSubscriptionId: subscription.id,
       stripeCustomerId: subscription.customer,
       lastCreditGrant: {
         date: new Date(),
-        freeCredits: planConfig.freeCredits,
-        bonusCredits: planConfig.bonusCredits,
-        totalCredits: planConfig.credits,
+        credits: planConfig.freeCredits,
+        type: 'initial',
         planName: planConfig.name
+      },
+      creditSchedule: {
+        monthlyCredits: planConfig.monthlyCredits,
+        remainingMonths: planConfig.durationMonths,
+        lastDistribution: null
       }
     };
 
     // Update user document
     await updateUserDocument(userId, updateData);
+
+    // Schedule monthly credit distributions
+    await scheduleMonthlyCredits(
+      userId,
+      planConfig.monthlyCredits,
+      planConfig.durationMonths
+    );
+
+    // Process any distributions that are already due (e.g., for annual plans)
+    await processPendingDistributions(userId);
 
     // Verification
     const updatedDoc = await getDoc(userRef);
@@ -268,133 +427,20 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
   }
 }
 
-async function handleCreditsPurchase(session: Stripe.Checkout.Session, userId: string) {
-  try {
-    const amountPaid = session.amount_total || 0;
-    let creditsToAdd = 0;
-    
-    if (amountPaid === 500) {
-      creditsToAdd = 5;
-    } else if (amountPaid === 2000) {
-      creditsToAdd = 25;
-    } else {
-      creditsToAdd = Math.floor(amountPaid / 100);
-    }
-
-    const userRef = doc(db, "users", userId);
-    const userDoc = await getDoc(userRef);
-    
-    if (!userDoc.exists()) {
-      throw new Error(`User document not found: ${userId}`);
-    }
-
-    const currentCredits = userDoc.data()?.credits || 0;
-    const updateData = {
-      credits: currentCredits + creditsToAdd,
-      lastCreditPurchase: {
-        date: new Date(),
-        amountPaid,
-        creditsAdded: creditsToAdd,
-        sessionId: session.id
-      }
-    };
-
-    await updateUserDocument(userId, updateData);
-
-    // Verification
-    const updatedDoc = await getDoc(userRef);
-    logEvent("CreditsPurchaseVerification", {
-      expected: updateData,
-      actual: updatedDoc.data()
-    });
-
-  } catch (error: any) {
-    logEvent("CreditsPurchaseError", {
-      error: error.message,
-      stack: error.stack,
-      userId,
-      sessionId: session.id
-    });
-    throw error;
-  }
-}
-
 async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
   try {
-    const subscriptionId = (invoice as any).subscription as string | undefined;
-    if (!subscriptionId) {
-      throw new Error(`No subscription ID found on invoice: ${invoice.id}`);
+    // @ts-expect-error: Stripe.Invoice may not have 'subscription' in older types, but it exists in API response
+    if (!invoice.subscription) {
+      throw new Error("No subscription ID found on invoice object");
     }
-    const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+
+    // @ts-expect-error: Stripe.Invoice may not have 'subscription' in older types, but it exists in API response
+    const subscription = await stripe.subscriptions.retrieve(invoice.subscription as string, {
       expand: ['items.data.price']
     });
 
-    // Get customer metadata
-    const customer = await stripe.customers.retrieve(invoice.customer as string);
-    let userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
-    
-    if (!userId) {
-      // Fallback: Find user by subscription ID
-      const usersRef = collection(db, "users");
-      const q = query(usersRef, where("stripeSubscriptionId", "==", subscriptionId));
-      const userQuerySnapshot = await getDocs(q);
-      
-      if (!userQuerySnapshot.empty) {
-        userId = userQuerySnapshot.docs[0].id;
-        // Update customer metadata for future reference
-        await stripe.customers.update(invoice.customer as string, {
-          metadata: { firebaseUserId: userId }
-        });
-      }
-    }
-    
-    if (!userId) {
-      throw new Error(`No Firebase user ID found for customer: ${invoice.customer}`);
-    }
-
-    const priceId = subscription.items.data[0].price.id;
-    const planConfig = getPlanConfig(priceId);
-    
-    if (!planConfig) {
-      throw new Error(`Unknown price ID for renewal: ${priceId}`);
-    }
-
-    // Extend subscription
-    const subscriptionEndDate = new Date();
-    subscriptionEndDate.setMonth(subscriptionEndDate.getMonth() + planConfig.durationMonths);
-
-    // Get current credits
-    const userRef = doc(db, "users", userId);
-    const userDoc = await getDoc(userRef);
-    
-    if (!userDoc.exists()) {
-      throw new Error(`User document not found: ${userId}`);
-    }
-
-    const currentCredits = userDoc.data()?.credits || 0;
-
-    // Prepare update data
-    const updateData = {
-      credits: currentCredits + planConfig.credits,
-      subscriptionEndDate,
-      lastCreditGrant: {
-        date: new Date(),
-        freeCredits: planConfig.freeCredits,
-        bonusCredits: planConfig.bonusCredits,
-        totalCredits: planConfig.credits,
-        planName: planConfig.name,
-        type: 'renewal'
-      }
-    };
-
-    await updateUserDocument(userId, updateData);
-
-    // Verification
-    const updatedDoc = await getDoc(userRef);
-    logEvent("SubscriptionRenewalVerification", {
-      expected: updateData,
-      actual: updatedDoc.data()
-    });
+    const userId = await getUserIdFromSubscription(subscription);
+    await processPendingDistributions(userId);
 
   } catch (error: any) {
     logEvent("SubscriptionRenewalError", {
@@ -408,28 +454,12 @@ async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
 
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   try {
-    // Get customer metadata
-    const customer = await stripe.customers.retrieve(subscription.customer as string);
-    let userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
-    
-    if (!userId) {
-      // Fallback: Find user by subscription ID
-      const usersRef = collection(db, "users");
-      const q = query(usersRef, where("stripeSubscriptionId", "==", subscription.id));
-      const userQuerySnapshot = await getDocs(q);
-      
-      if (!userQuerySnapshot.empty) {
-        userId = userQuerySnapshot.docs[0].id;
-      }
-    }
-    
-    if (!userId) {
-      throw new Error(`No Firebase user ID found for customer: ${subscription.customer}`);
-    }
+    const userId = await getUserIdFromSubscription(subscription);
+    const userRef = doc(db, "users", userId);
 
     // Prepare update based on subscription status
     const updateData: any = {
-      updatedAt: new Date(),
+      updatedAt: Timestamp.now(),
       lastSubscriptionStatusChange: {
         status: subscription.status,
         date: new Date()
@@ -440,6 +470,19 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       updateData.planType = "free";
       updateData.stripeSubscriptionId = null;
       updateData.subscriptionEndDate = null;
+      updateData.creditSchedule = null;
+      
+      // Optionally: Cancel pending distributions
+      const creditsRef = collection(db, `users/${userId}/scheduledCredits`);
+      const pendingQuery = query(creditsRef, where("status", "==", "pending"));
+      const pendingSnap = await getDocs(pendingQuery);
+      
+      const batch = writeBatch(db);
+      pendingSnap.forEach(doc => {
+        batch.update(doc.ref, { status: "canceled" });
+      });
+      await batch.commit();
+      
     } else if (subscription.status === "active") {
       updateData.planType = "premium";
       updateData.stripeSubscriptionId = subscription.id;
@@ -448,7 +491,6 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     await updateUserDocument(userId, updateData);
 
     // Verification
-    const userRef = doc(db, "users", userId);
     const updatedDoc = await getDoc(userRef);
     logEvent("SubscriptionChangeVerification", {
       expected: updateData,
