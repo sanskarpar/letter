@@ -788,22 +788,24 @@ const DashboardPage = () => {
   const [error, setError] = useState<string | null>(null);
 
   return (
-    <DashboardPageInner
-      user={user}
-      setUser={setUser}
-      userData={userData}
-      setUserData={setUserData}
-      userLetters={userLetters}
-      setUserLetters={setUserLetters}
-      userRequests={userRequests}
-      setUserRequests={setUserRequests}
-      successMessage={successMessage}
-      setSuccessMessage={setSuccessMessage}
-      loading={loading}
-      setLoading={setLoading}
-      error={error}
-      setError={setError}
-    />
+    <Suspense fallback={<div>Loading...</div>}>
+      <DashboardPageInner
+        user={user}
+        setUser={setUser}
+        userData={userData}
+        setUserData={setUserData}
+        userLetters={userLetters}
+        setUserLetters={setUserLetters}
+        userRequests={userRequests}
+        setUserRequests={setUserRequests}
+        successMessage={successMessage}
+        setSuccessMessage={setSuccessMessage}
+        loading={loading}
+        setLoading={setLoading}
+        error={error}
+        setError={setError}
+      />
+    </Suspense>
   );
 };
 
