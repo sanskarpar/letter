@@ -44,12 +44,17 @@ function getPlanConfig(priceId: string) {
     };
   }
   
+  console.log("🔍 Available plan configs:", Object.keys(configs));
+  console.log("🔍 Looking for price ID:", priceId);
+  
   return configs[priceId] || null;
 }
 
 export async function POST(request: NextRequest) {
   const body = await request.text();
   const signature = request.headers.get("stripe-signature");
+
+  console.log("🚀 Webhook received - starting processing");
 
   if (!signature) {
     console.error("❌ No Stripe signature found");
@@ -64,6 +69,7 @@ export async function POST(request: NextRequest) {
       signature,
       process.env.STRIPE_WEBHOOK_SECRET!
     );
+    console.log("✅ Webhook signature verified successfully");
   } catch (err: any) {
     console.error("❌ Webhook signature verification failed:", err.message);
     return NextResponse.json(
@@ -73,6 +79,7 @@ export async function POST(request: NextRequest) {
   }
 
   console.log(`🔔 Received webhook event: ${event.type}`);
+  console.log("📄 Event data object keys:", Object.keys(event.data.object));
 
   try {
     switch (event.type) {
@@ -85,14 +92,29 @@ export async function POST(request: NextRequest) {
           metadata: session.metadata,
           mode: session.mode,
           subscriptionId: session.subscription,
+          paymentStatus: session.payment_status,
         });
 
         const userId = session.metadata?.userId;
         
         if (!userId) {
           console.error("❌ No userId found in session metadata");
+          console.error("Available metadata keys:", Object.keys(session.metadata || {}));
           return NextResponse.json({ error: "No userId in metadata" }, { status: 400 });
         }
+
+        console.log("✅ Found userId in metadata:", userId);
+
+        // Verify user exists in Firestore before processing
+        const userRef = doc(db, "users", userId);
+        const userDoc = await getDoc(userRef);
+        
+        if (!userDoc.exists()) {
+          console.error("❌ User document not found in Firestore:", userId);
+          return NextResponse.json({ error: "User not found" }, { status: 400 });
+        }
+
+        console.log("✅ User document found in Firestore");
 
         // Handle subscription purchase
         if (session.mode === "subscription" && session.subscription) {
@@ -102,6 +124,8 @@ export async function POST(request: NextRequest) {
           // Handle one-time credit purchase
           console.log("💰 Handling credits purchase for session:", session.id);
           await handleCreditsPurchase(session, userId);
+        } else {
+          console.warn("⚠️ Unknown session mode:", session.mode);
         }
         
         break;
@@ -142,9 +166,11 @@ export async function POST(request: NextRequest) {
         console.log(`ℹ️ Unhandled event type: ${event.type}`);
     }
 
+    console.log("✅ Webhook processing completed successfully");
     return NextResponse.json({ received: true });
   } catch (error: any) {
     console.error("💥 Error processing webhook:", error);
+    console.error("💥 Error stack:", error.stack);
     return NextResponse.json(
       { error: error.message || "Internal server error" },
       { status: 500 }
@@ -160,9 +186,10 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
     const subscriptionId = session.subscription as string;
     if (!subscriptionId) {
       console.error("❌ No subscription ID found in session");
-      return;
+      throw new Error("No subscription ID found in session");
     }
 
+    console.log("🔍 Retrieving subscription:", subscriptionId);
     const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
       expand: ['items.data.price']
     });
@@ -176,13 +203,18 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
 
     if (subscription.items.data.length === 0) {
       console.error("❌ No line items found in subscription");
-      return;
+      throw new Error("No line items found in subscription");
     }
 
     const lineItem = subscription.items.data[0];
     const priceId = lineItem.price.id;
     
     console.log("💲 Price ID from subscription:", priceId);
+    console.log("💲 Available environment variables:", {
+      monthly: process.env.STRIPE_MONTHLY_PRICE_ID ? "SET" : "NOT SET",
+      semiannual: process.env.STRIPE_SEMIANNUAL_PRICE_ID ? "SET" : "NOT SET",
+      annual: process.env.STRIPE_ANNUAL_PRICE_ID ? "SET" : "NOT SET"
+    });
     
     const planConfig = getPlanConfig(priceId);
     if (!planConfig) {
@@ -192,7 +224,7 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
         semiannual: process.env.STRIPE_SEMIANNUAL_PRICE_ID,
         annual: process.env.STRIPE_ANNUAL_PRICE_ID
       });
-      return;
+      throw new Error(`Unknown price ID: ${priceId}`);
     }
 
     console.log("✅ Plan config found:", planConfig);
@@ -201,13 +233,17 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
     const subscriptionEndDate = new Date();
     subscriptionEndDate.setMonth(subscriptionEndDate.getMonth() + planConfig.durationMonths);
 
+    console.log("📅 Calculated subscription end date:", subscriptionEndDate.toISOString());
+
     // Get current user data
     const userRef = doc(db, "users", userId);
+    console.log("🔍 Getting user document for:", userId);
+    
     const userDoc = await getDoc(userRef);
     
     if (!userDoc.exists()) {
       console.error("❌ User document not found:", userId);
-      return;
+      throw new Error(`User document not found: ${userId}`);
     }
 
     const currentUserData = userDoc.data();
@@ -216,11 +252,14 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
     console.log("👤 Current user data:", {
       currentCredits,
       currentPlanType: currentUserData?.planType,
+      currentSubscriptionId: currentUserData?.stripeSubscriptionId,
+      currentCustomerId: currentUserData?.stripeCustomerId,
     });
 
     // CRITICAL: Store the customer ID in Stripe customer metadata for future reference
     if (subscription.customer && typeof subscription.customer === 'string') {
       try {
+        console.log("🔄 Updating Stripe customer metadata...");
         await stripe.customers.update(subscription.customer, {
           metadata: {
             firebaseUserId: userId
@@ -232,7 +271,7 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       }
     }
 
-    // Update user document
+    // Prepare update data
     const updateData = {
       planType: planConfig.planType,
       credits: currentCredits + planConfig.credits,
@@ -242,9 +281,27 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       updatedAt: new Date(),
     };
 
-    console.log("📝 Updating user with data:", updateData);
+    console.log("📝 Preparing to update user with data:", updateData);
+    console.log("📝 User reference path:", userRef.path);
 
+    // Update user document
+    console.log("🔄 Executing Firestore update...");
     await updateDoc(userRef, updateData);
+    console.log("✅ Firestore update completed successfully");
+
+    // Verify the update by reading the document again
+    const updatedUserDoc = await getDoc(userRef);
+    if (updatedUserDoc.exists()) {
+      const updatedData = updatedUserDoc.data();
+      console.log("🔍 Verification - Updated user data:", {
+        planType: updatedData?.planType,
+        credits: updatedData?.credits,
+        stripeSubscriptionId: updatedData?.stripeSubscriptionId,
+        subscriptionEndDate: updatedData?.subscriptionEndDate,
+      });
+    } else {
+      console.error("❌ User document not found after update - this shouldn't happen");
+    }
 
     console.log(`✅ Successfully updated user ${userId} with subscription:`, {
       planType: planConfig.planType,
@@ -256,6 +313,12 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
 
   } catch (error) {
     console.error("💥 Error handling subscription purchase:", error);
+    const err = error as any;
+    console.error("💥 Error details:", {
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+    });
     throw error;
   }
 }
@@ -269,7 +332,7 @@ async function handleCreditsPurchase(session: Stripe.Checkout.Session, userId: s
     
     if (!userDoc.exists()) {
       console.error("❌ User document not found:", userId);
-      return;
+      throw new Error(`User document not found: ${userId}`);
     }
 
     const currentUserData = userDoc.data();
@@ -278,6 +341,8 @@ async function handleCreditsPurchase(session: Stripe.Checkout.Session, userId: s
     // Determine credits based on amount paid
     const amountPaid = session.amount_total || 0; // in cents
     let creditsToAdd = 0;
+    
+    console.log("💵 Amount paid (in cents):", amountPaid);
     
     // Based on your pricing: 5 credits = $5, 25 credits = $20
     if (amountPaid === 500) { // $5.00
@@ -289,10 +354,23 @@ async function handleCreditsPurchase(session: Stripe.Checkout.Session, userId: s
       creditsToAdd = Math.floor(amountPaid / 100);
     }
     
-    await updateDoc(userRef, {
+    console.log("💰 Credits to add:", creditsToAdd);
+    
+    const updateData = {
       credits: currentCredits + creditsToAdd,
       updatedAt: new Date(),
-    });
+    };
+    
+    console.log("📝 Updating user with credits data:", updateData);
+    
+    await updateDoc(userRef, updateData);
+
+    // Verify the update
+    const updatedUserDoc = await getDoc(userRef);
+    if (updatedUserDoc.exists()) {
+      const updatedData = updatedUserDoc.data();
+      console.log("🔍 Verification - Updated credits:", updatedData?.credits);
+    }
 
     console.log(`✅ Added ${creditsToAdd} credits to user ${userId}. Total: ${currentCredits + creditsToAdd}`);
 
@@ -310,7 +388,7 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
     const subscriptionId = (invoice as any).subscription as string;
     if (!subscriptionId) {
       console.error("❌ No subscription ID found on invoice:", invoice.id);
-      return;
+      throw new Error("No subscription ID found on invoice");
     }
 
     const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
@@ -325,11 +403,9 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
       console.log("⚠️ No Firebase user ID in customer metadata, attempting to find by subscription ID");
       
       // Fallback: Try to find user by subscription ID in Firestore
-      // This is a more expensive operation but necessary as backup
       const usersRef = collection(db, "users");
       const q = query(
         usersRef,
-        // @ts-ignore
         where("stripeSubscriptionId", "==", subscriptionId)
       );
       const userQuerySnapshot = await getDocs(q);
@@ -353,7 +429,7 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
     
     if (!userId) {
       console.error("❌ No Firebase user ID found for customer:", invoice.customer);
-      return;
+      throw new Error(`No Firebase user ID found for customer: ${invoice.customer}`);
     }
 
     console.log("👤 Found user ID for renewal:", userId);
@@ -364,7 +440,7 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
     const planConfig = getPlanConfig(priceId);
     if (!planConfig) {
       console.error("❌ Unknown price ID for renewal:", priceId);
-      return;
+      throw new Error(`Unknown price ID for renewal: ${priceId}`);
     }
 
     // Extend subscription and add credits
@@ -376,7 +452,7 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
     
     if (!userDoc.exists()) {
       console.error("❌ User document not found for renewal:", userId);
-      return;
+      throw new Error(`User document not found for renewal: ${userId}`);
     }
 
     const currentUserData = userDoc.data();
@@ -408,16 +484,8 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       console.log("⚠️ No Firebase user ID in customer metadata, attempting to find by subscription ID");
       
       // Fallback: Try to find user by subscription ID
-      // Use Firestore modular SDK to query users by stripeSubscriptionId
       const usersRef = collection(db, "users");
-      const q = query(usersRef, 
-        // @ts-ignore
-        // Firestore types may not recognize this field, but it's valid if your schema has it
-        // If you have a typescript error, you may need to adjust your Firestore data model typings
-        // or use 'as any' for the field name
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        where("stripeSubscriptionId", "==", subscription.id)
-      );
+      const q = query(usersRef, where("stripeSubscriptionId", "==", subscription.id));
       const userQuerySnapshot = await getDocs(q);
       if (!userQuerySnapshot.empty) {
         userId = userQuerySnapshot.docs[0].id;
@@ -427,7 +495,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     
     if (!userId) {
       console.error("❌ No Firebase user ID found for customer:", subscription.customer);
-      return;
+      throw new Error(`No Firebase user ID found for customer: ${subscription.customer}`);
     }
 
     console.log("👤 Found user ID for subscription change:", userId);
