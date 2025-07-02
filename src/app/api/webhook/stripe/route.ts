@@ -1,7 +1,7 @@
 // app/api/webhooks/stripe/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { getFirestore, doc, updateDoc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
+import { getFirestore, doc, updateDoc, getDoc, collection, query, where, getDocs, setDoc } from "firebase/firestore";
 import { app } from "@/firebase/config";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -54,6 +54,84 @@ function getPlanConfig(priceId: string) {
   console.log("🔍 Looking for price ID:", priceId);
   
   return configs[priceId] || null;
+}
+
+// Enhanced Firestore update method with fallback and retry logic
+async function updateFirestoreDocument(userRef: any, updateData: any, userId: string, operationType: string = "update"): Promise<boolean> {
+  const maxRetries = 3;
+  let lastError: any = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔄 Attempt ${attempt}/${maxRetries}: Executing Firestore ${operationType} for user ${userId}`);
+      console.log("📝 Update data:", JSON.stringify(updateData, null, 2));
+
+      try {
+        // First, try updateDoc
+        await updateDoc(userRef, updateData);
+        console.log("✅ Firestore updateDoc completed successfully");
+      } catch (updateError: any) {
+        console.warn(`⚠️ updateDoc failed on attempt ${attempt}:`, updateError.message);
+        console.warn("🔄 Falling back to setDoc with merge option...");
+        
+        // Fallback to setDoc with merge
+        await setDoc(userRef, updateData, { merge: true });
+        console.log("✅ Firestore setDoc with merge completed successfully");
+      }
+
+      // Wait for Firestore eventual consistency
+      console.log("⏳ Waiting for Firestore consistency...");
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      // Verify the update
+      const verificationDoc = await getDoc(userRef);
+      if (!verificationDoc.exists()) {
+        throw new Error("Document verification failed: document does not exist");
+      }
+
+      interface UserData {
+        planType?: string;
+        credits?: number;
+        subscriptionEndDate?: any;
+        nextCreditAllocationDate?: any;
+        stripeSubscriptionId?: string;
+        updatedAt?: any;
+      }
+      const verifiedData = verificationDoc.data() as UserData;
+      console.log("🔍 Verification successful - Document data:", {
+        planType: verifiedData?.planType,
+        credits: verifiedData?.credits,
+        subscriptionEndDate: verifiedData?.subscriptionEndDate?.toDate?.() || verifiedData?.subscriptionEndDate,
+        nextCreditAllocationDate: verifiedData?.nextCreditAllocationDate?.toDate?.() || verifiedData?.nextCreditAllocationDate,
+        stripeSubscriptionId: verifiedData?.stripeSubscriptionId,
+        updatedAt: verifiedData?.updatedAt?.toDate?.() || verifiedData?.updatedAt
+      });
+
+      // Verify critical fields were updated
+      if (updateData.credits && verifiedData?.credits !== updateData.credits) {
+        throw new Error(`Credit verification failed: expected ${updateData.credits}, got ${verifiedData?.credits}`);
+      }
+      if (updateData.planType && verifiedData?.planType !== updateData.planType) {
+        throw new Error(`Plan type verification failed: expected ${updateData.planType}, got ${verifiedData?.planType}`);
+      }
+
+      console.log(`✅ Firestore ${operationType} and verification completed successfully on attempt ${attempt}`);
+      return true;
+
+    } catch (error: any) {
+      lastError = error;
+      console.error(`💥 Attempt ${attempt}/${maxRetries} failed:`, error.message);
+      
+      if (attempt < maxRetries) {
+        const delay = attempt * 2000; // Exponential backoff: 2s, 4s, 6s
+        console.log(`⏳ Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  console.error(`💥 All ${maxRetries} attempts failed for Firestore ${operationType}`);
+  throw lastError;
 }
 
 export async function POST(request: NextRequest) {
@@ -309,7 +387,6 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       }
     };
 
-    console.log("📝 Preparing to update user with data:", updateData);
     console.log("📝 Credit breakdown:", {
       previousCredits: currentCredits,
       monthlyFreeCredits: planConfig.freeCredits,
@@ -320,33 +397,8 @@ async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, user
       nextCreditDate: nextCreditDate.toISOString()
     });
 
-    console.log("🔄 Executing Firestore update with merge...");
-    
-    try {
-      await updateDoc(userRef, updateData);
-      console.log("✅ Firestore updateDoc completed successfully");
-    } catch (updateError: any) {
-      console.warn("⚠️ updateDoc failed, trying setDoc with merge:", updateError.message);
-      
-      const { setDoc } = await import("firebase/firestore");
-      await setDoc(userRef, updateData, { merge: true });
-      console.log("✅ Firestore setDoc with merge completed successfully");
-    }
-
-    // Verification
-    console.log("⏳ Waiting 1 second before verification...");
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    const updatedUserDoc = await getDoc(userRef);
-    if (updatedUserDoc.exists()) {
-      const updatedData = updatedUserDoc.data();
-      console.log("🔍 Verification - Updated user data:", {
-        planType: updatedData?.planType,
-        credits: updatedData?.credits,
-        nextCreditAllocationDate: updatedData?.nextCreditAllocationDate,
-        subscriptionEndDate: updatedData?.subscriptionEndDate,
-      });
-    }
+    // Use enhanced update method with retry logic
+    await updateFirestoreDocument(userRef, updateData, userId, "subscription_purchase");
 
     console.log(`✅ Successfully processed subscription for user ${userId}:`, {
       planType: planConfig.planType,
@@ -406,28 +458,16 @@ async function handleCreditsPurchase(session: Stripe.Checkout.Session, userId: s
     const updateData: any = {
       credits: currentCredits + creditsToAdd,
       updatedAt: new Date(),
+      lastCreditGrant: {
+        date: new Date(),
+        totalCredits: creditsToAdd,
+        type: 'one_time_purchase',
+        amountPaid: amountPaid
+      }
     };
     
-    console.log("📝 Updating user with credits data:", updateData);
-    
-    try {
-      await updateDoc(userRef, updateData);
-      console.log("✅ Credits updateDoc completed successfully");
-    } catch (updateError: any) {
-      console.warn("⚠️ Credits updateDoc failed, trying setDoc with merge:", updateError.message);
-      
-      const { setDoc } = await import("firebase/firestore");
-      await setDoc(userRef, updateData, { merge: true });
-      console.log("✅ Credits setDoc with merge completed successfully");
-    }
-
-    // Verify the update
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const updatedUserDoc = await getDoc(userRef);
-    if (updatedUserDoc.exists()) {
-      const updatedData = updatedUserDoc.data();
-      console.log("🔍 Verification - Updated credits:", updatedData?.credits);
-    }
+    // Use enhanced update method with retry logic
+    await updateFirestoreDocument(userRef, updateData, userId, "credits_purchase");
 
     console.log(`✅ Added ${creditsToAdd} credits to user ${userId}. Total: ${currentCredits + creditsToAdd}`);
 
@@ -529,16 +569,8 @@ async function handleSubscriptionRenewal(invoice: Stripe.Invoice) {
       }
     };
 
-    try {
-      await updateDoc(userRef, renewalUpdateData);
-      console.log("✅ Renewal updateDoc completed successfully");
-    } catch (updateError: any) {
-      console.warn("⚠️ Renewal updateDoc failed, trying setDoc with merge:", updateError.message);
-      
-      const { setDoc } = await import("firebase/firestore");
-      await setDoc(userRef, renewalUpdateData, { merge: true });
-      console.log("✅ Renewal setDoc with merge completed successfully");
-    }
+    // Use enhanced update method with retry logic
+    await updateFirestoreDocument(userRef, renewalUpdateData, userId, "subscription_renewal");
 
     console.log(`✅ Renewed subscription for user ${userId}:`, {
       monthlyCreditsAdded: planConfig.monthlyCredits,
@@ -594,16 +626,8 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
         updatedAt: new Date(),
       };
 
-      try {
-        await updateDoc(userRef, downgradeData);
-        console.log("✅ Downgrade updateDoc completed successfully");
-      } catch (updateError: any) {
-        console.warn("⚠️ Downgrade updateDoc failed, trying setDoc with merge:", updateError.message);
-        
-        const { setDoc } = await import("firebase/firestore");
-        await setDoc(userRef, downgradeData, { merge: true });
-        console.log("✅ Downgrade setDoc with merge completed successfully");
-      }
+      // Use enhanced update method with retry logic
+      await updateFirestoreDocument(userRef, downgradeData, userId, "subscription_downgrade");
       
       console.log(`⬇️ Downgraded user ${userId} to free plan`);
     } else if (subscription.status === "active") {
@@ -614,16 +638,8 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
         updatedAt: new Date(),
       };
 
-      try {
-        await updateDoc(userRef, upgradeData);
-        console.log("✅ Upgrade updateDoc completed successfully");
-      } catch (updateError: any) {
-        console.warn("⚠️ Upgrade updateDoc failed, trying setDoc with merge:", updateError.message);
-        
-        const { setDoc } = await import("firebase/firestore");
-        await setDoc(userRef, upgradeData, { merge: true });
-        console.log("✅ Upgrade setDoc with merge completed successfully");
-      }
+      // Use enhanced update method with retry logic
+      await updateFirestoreDocument(userRef, upgradeData, userId, "subscription_upgrade");
       
       console.log(`⬆️ Activated premium plan for user ${userId}`);
     }
