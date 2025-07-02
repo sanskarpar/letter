@@ -14,6 +14,7 @@ import {
   runTransaction,
   Timestamp,
   writeBatch,
+  arrayUnion,
   increment
 } from "firebase/firestore";
 import { initializeApp, getApps } from "firebase/app";
@@ -27,483 +28,230 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2025-06-30.basil",
 });
 
-// Interfaces
-interface CreditDistribution {
-  id: string;
-  credits: number;
-  distributionDate: Timestamp;
-  status: 'pending' | 'processed' | 'failed';
-  createdAt: Timestamp;
-  processedAt?: Timestamp;
-  idempotencyKey?: string;
-}
+// Constants
+const MONTHLY_CREDITS = 20;
+const INITIAL_FREE_CREDITS = 5;
 
-interface UserCreditSchedule {
-  monthlyCredits: number;
-  remainingMonths: number;
-  lastDistribution: Timestamp | null;
-}
-
-// Enhanced logging function
+// Enhanced logging
 function logEvent(eventName: string, data: any) {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${eventName}:`, JSON.stringify(data, null, 2));
 }
 
-// Plan configurations with monthly credit distribution
+// Plan configurations
 function getPlanConfig(priceId: string) {
-  const configs: Record<string, any> = {
+  const configs = {
     [process.env.STRIPE_MONTHLY_PRICE_ID!]: {
       planType: "premium",
-      monthlyCredits: 20, // Bonus credits per month
-      freeCredits: 5,     // One-time free credits
       durationMonths: 1,
       name: "Monthly Premium"
     },
     [process.env.STRIPE_SEMIANNUAL_PRICE_ID!]: {
       planType: "premium",
-      monthlyCredits: 20, // Same monthly credits as monthly plan
-      freeCredits: 5,     // One-time free credits
       durationMonths: 6,
       name: "Semi-Annual Premium"
     },
     [process.env.STRIPE_ANNUAL_PRICE_ID!]: {
       planType: "premium",
-      monthlyCredits: 20, // Same monthly credits as monthly plan
-      freeCredits: 5,     // One-time free credits
       durationMonths: 12,
       name: "Annual Premium"
     }
   };
-
-  logEvent("PlanConfigLookup", {
-    priceId,
-    availablePlans: Object.keys(configs),
-    foundConfig: configs[priceId] || null
-  });
-
+  
   return configs[priceId] || null;
-}
-
-// Transactional update helper
-async function updateUserDocument(userId: string, updateData: any) {
-  const userRef = doc(db, "users", userId);
-  
-  try {
-    // First try with transaction for atomic update
-    await runTransaction(db, async (transaction) => {
-      const userDoc = await transaction.get(userRef);
-      if (!userDoc.exists()) {
-        throw new Error(`User document ${userId} does not exist`);
-      }
-      
-      // Add server timestamp
-      updateData.updatedAt = Timestamp.now();
-      updateData.lastWebhookUpdate = new Date().toISOString();
-      
-      transaction.update(userRef, updateData);
-    });
-    
-    logEvent("FirestoreUpdateSuccess", { userId, updateData });
-    return true;
-  } catch (transactionError: any) {
-    logEvent("FirestoreTransactionError", {
-      userId,
-      error: transactionError.message,
-      stack: transactionError.stack
-    });
-    
-    // Fallback to direct update
-    try {
-      await setDoc(userRef, updateData, { merge: true });
-      logEvent("FirestoreFallbackUpdateSuccess", { userId, updateData });
-      return true;
-    } catch (fallbackError: any) {
-      logEvent("FirestoreUpdateFailure", {
-        userId,
-        error: fallbackError.message,
-        stack: fallbackError.stack
-      });
-      throw fallbackError;
-    }
-  }
-}
-
-// Schedule monthly credit distribution with idempotency
-async function scheduleMonthlyCredits(userId: string, monthlyCredits: number, months: number) {
-  const creditsRef = collection(db, `users/${userId}/scheduledCredits`);
-  const now = new Date();
-  const batch = writeBatch(db);
-  
-  for (let i = 1; i <= months; i++) {
-    const distributionDate = new Date(now);
-    distributionDate.setMonth(distributionDate.getMonth() + i);
-    
-    const distId = `dist_${i}_${distributionDate.getTime()}`;
-    const distDoc = doc(creditsRef, distId);
-    
-    batch.set(distDoc, {
-      id: distId,
-      credits: monthlyCredits,
-      distributionDate: Timestamp.fromDate(distributionDate),
-      status: "pending",
-      createdAt: Timestamp.now(),
-      idempotencyKey: `${userId}_${distributionDate.getTime()}`
-    });
-  }
-  
-  await batch.commit();
-  
-  logEvent("MonthlyCreditsScheduled", {
-    userId,
-    monthlyCredits,
-    months,
-    firstDistribution: new Date(now.setMonth(now.getMonth() + 1)),
-    lastDistribution: new Date(now.setMonth(now.getMonth() + months))
-  });
-}
-
-// Process pending credit distributions
-async function processPendingDistributions(userId: string) {
-  const userRef = doc(db, "users", userId);
-  const creditsRef = collection(db, `users/${userId}/scheduledCredits`);
-  
-  const now = Timestamp.now();
-  const pendingQuery = query(
-    creditsRef,
-    where("status", "==", "pending"),
-    where("distributionDate", "<=", now)
-  );
-  
-  const pendingSnap = await getDocs(pendingQuery);
-  
-  if (pendingSnap.empty) {
-    logEvent("NoPendingDistributions", { userId });
-    return;
-  }
-
-  const userDoc = await getDoc(userRef);
-  if (!userDoc.exists()) {
-    throw new Error(`User document not found: ${userId}`);
-  }
-
-  const userData = userDoc.data();
-  const currentCredits = userData?.credits || 0;
-  const creditSchedule = userData?.creditSchedule as UserCreditSchedule | undefined;
-  
-  if (!creditSchedule) {
-    throw new Error(`No credit schedule found for user: ${userId}`);
-  }
-
-  let totalCreditsToAdd = 0;
-  const batch = writeBatch(db);
-
-  pendingSnap.forEach((doc) => {
-    const dist = doc.data() as CreditDistribution;
-    totalCreditsToAdd += dist.credits;
-    batch.update(doc.ref, {
-      status: "processed",
-      processedAt: now
-    });
-  });
-
-  // Atomic update of credits and distribution status
-  batch.update(userRef, {
-    credits: currentCredits + totalCreditsToAdd,
-    updatedAt: now,
-    "creditSchedule.lastDistribution": now,
-    "creditSchedule.remainingMonths": increment(-pendingSnap.size),
-    lastCreditGrant: {
-      date: now.toDate(),
-      credits: totalCreditsToAdd,
-      type: 'monthly',
-      planName: userData.planType
-    }
-  });
-
-  await batch.commit();
-  
-  logEvent("MonthlyCreditsDistributed", {
-    userId,
-    creditsAdded: totalCreditsToAdd,
-    distributionsProcessed: pendingSnap.size,
-    newTotalCredits: currentCredits + totalCreditsToAdd,
-    remainingMonths: creditSchedule.remainingMonths - pendingSnap.size
-  });
 }
 
 // Get user ID from subscription
 async function getUserIdFromSubscription(subscription: Stripe.Subscription): Promise<string> {
-  // First try customer metadata
   const customer = await stripe.customers.retrieve(subscription.customer as string);
   let userId = (customer as Stripe.Customer).metadata?.firebaseUserId;
   
-  if (userId) return userId;
-
-  // Fallback: Find user by subscription ID
-  const usersRef = collection(db, "users");
-  const q = query(usersRef, where("stripeSubscriptionId", "==", subscription.id));
-  const userQuerySnapshot = await getDocs(q);
-  
-  if (!userQuerySnapshot.empty) {
-    userId = userQuerySnapshot.docs[0].id;
-    // Update customer metadata for future reference
-    await stripe.customers.update(subscription.customer as string, {
-      metadata: { firebaseUserId: userId }
-    });
-    return userId;
+  if (!userId) {
+    const usersRef = collection(db, "users");
+    const q = query(usersRef, where("stripeSubscriptionId", "==", subscription.id));
+    const userQuerySnapshot = await getDocs(q);
+    
+    if (!userQuerySnapshot.empty) {
+      userId = userQuerySnapshot.docs[0].id;
+      await stripe.customers.update(subscription.customer as string, {
+        metadata: { firebaseUserId: userId }
+      });
+    }
   }
   
-  throw new Error(`No Firebase user ID found for customer: ${subscription.customer}`);
+  if (!userId) throw new Error(`No user ID found for customer: ${subscription.customer}`);
+  return userId;
 }
 
+// Check and add monthly credits if due
+async function checkMonthlyCredits(userId: string) {
+  const userRef = doc(db, "users", userId);
+  
+  return runTransaction(db, async (transaction) => {
+    const userDoc = await transaction.get(userRef);
+    if (!userDoc.exists()) {
+      throw new Error(`User not found: ${userId}`);
+    }
+
+    const userData = userDoc.data();
+    if (userData.planType !== "premium") return;
+
+    const now = new Date();
+    const lastCreditDate = userData.lastMonthlyCredit?.toDate();
+    const nextCreditDate = userData.nextCreditDate?.toDate();
+    
+    // If no credits have been given yet, initialize
+    if (!lastCreditDate) {
+      transaction.update(userRef, {
+        lastMonthlyCredit: Timestamp.now(),
+        nextCreditDate: getNextCreditDate(new Date())
+      });
+      return;
+    }
+
+    // Check if it's time for monthly credits
+    if (now >= (nextCreditDate || new Date(0))) {
+      transaction.update(userRef, {
+        credits: increment(MONTHLY_CREDITS),
+        lastMonthlyCredit: Timestamp.now(),
+        nextCreditDate: getNextCreditDate(now),
+        creditHistory: arrayUnion({
+          date: Timestamp.now(),
+          credits: MONTHLY_CREDITS,
+          type: "monthly"
+        })
+      });
+
+      logEvent("MonthlyCreditsAdded", { 
+        userId, 
+        creditsAdded: MONTHLY_CREDITS,
+        nextCreditDate: getNextCreditDate(now).toDate().toISOString()
+      });
+    }
+  });
+}
+
+// Calculate next credit date (30 days from now)
+function getNextCreditDate(fromDate: Date): Timestamp {
+  const nextDate = new Date(fromDate);
+  nextDate.setDate(nextDate.getDate() + 30);
+  return Timestamp.fromDate(nextDate);
+}
+
+// Webhook handler
 export async function POST(request: NextRequest) {
   const body = await request.text();
   const signature = request.headers.get("stripe-signature") || "";
   
-  logEvent("WebhookReceived", {
-    bodyLength: body.length,
-    signaturePresent: signature.length > 0
-  });
-
   let event: Stripe.Event;
-  
   try {
     event = stripe.webhooks.constructEvent(
       body,
       signature,
       process.env.STRIPE_WEBHOOK_SECRET!
     );
-    logEvent("WebhookVerified", { type: event.type });
+    logEvent("WebhookReceived", { type: event.type });
   } catch (err: any) {
-    logEvent("WebhookVerificationFailed", {
-      error: err.message,
-      stack: err.stack
-    });
-    return NextResponse.json(
-      { error: `Webhook Error: ${err.message}` },
-      { status: 400 }
-    );
+    logEvent("WebhookVerificationFailed", { error: err.message });
+    return NextResponse.json({ error: `Webhook Error: ${err.message}` }, { status: 400 });
   }
 
   try {
     switch (event.type) {
       case "checkout.session.completed":
-        await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
+        await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
         break;
         
       case "invoice.payment_succeeded":
-        await handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice);
+        await handleInvoicePaid(event.data.object as Stripe.Invoice);
         break;
         
       case "customer.subscription.updated":
       case "customer.subscription.deleted":
         await handleSubscriptionChange(event.data.object as Stripe.Subscription);
         break;
-        
-      default:
-        logEvent("UnhandledEventType", { type: event.type });
     }
     
     return NextResponse.json({ received: true });
   } catch (error: any) {
-    logEvent("WebhookProcessingError", {
-      error: error.message,
-      stack: error.stack,
-      eventType: event.type
-    });
-    
-    return NextResponse.json(
-      { error: error.message || "Internal server error" },
-      { status: 500 }
-    );
+    logEvent("WebhookProcessingError", { error: error.message });
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) {
-  logEvent("CheckoutSessionCompleted", {
-    id: session.id,
-    mode: session.mode,
-    payment_status: session.payment_status,
-    metadata: session.metadata
+// Handle new subscription
+async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
+  if (!session.subscription || !session.metadata?.userId) {
+    throw new Error("Missing subscription or user ID in session");
+  }
+
+  const subscription = await stripe.subscriptions.retrieve(session.subscription as string);
+  const priceId = subscription.items.data[0].price.id;
+  const planConfig = getPlanConfig(priceId);
+  const userId = session.metadata.userId;
+
+  if (!planConfig) throw new Error(`Unknown price ID: ${priceId}`);
+
+  const userRef = doc(db, "users", userId);
+  const userDoc = await getDoc(userRef);
+  const currentCredits = userDoc.exists() ? userDoc.data().credits || 0 : 0;
+
+  await setDoc(userRef, {
+    planType: planConfig.planType,
+    credits: currentCredits + INITIAL_FREE_CREDITS,
+    stripeSubscriptionId: subscription.id,
+    stripeCustomerId: subscription.customer,
+    subscriptionStart: Timestamp.now(),
+    lastMonthlyCredit: Timestamp.now(),
+    creditHistory: arrayUnion({
+      date: Timestamp.now(),
+      credits: INITIAL_FREE_CREDITS,
+      type: "initial"
+    }),
+    updatedAt: Timestamp.now()
+  }, { merge: true });
+
+  logEvent("SubscriptionCreated", { 
+    userId: userId, 
+    plan: planConfig.name,
+    initialCredits: INITIAL_FREE_CREDITS
   });
-
-  const userId = session.metadata?.userId;
-  if (!userId) {
-    throw new Error("No userId found in session metadata");
-  }
-
-  if (session.mode === "subscription" && session.subscription) {
-    await handleSubscriptionPurchase(session, userId);
-  } else if (session.mode === "payment") {
-    logEvent("CreditsPurchaseNotImplemented", { sessionId: session.id, userId });
-  }
 }
 
-async function handleSubscriptionPurchase(session: Stripe.Checkout.Session, userId: string) {
-  try {
-    const subscriptionId = session.subscription as string;
-    const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-      expand: ['items.data.price']
-    });
-    
-    const priceId = subscription.items.data[0].price.id;
-    const planConfig = getPlanConfig(priceId);
-    
-    if (!planConfig) {
-      throw new Error(`Unknown price ID: ${priceId}`);
-    }
-
-    // Calculate subscription end date
-    const subscriptionEndDate = new Date();
-    subscriptionEndDate.setMonth(subscriptionEndDate.getMonth() + planConfig.durationMonths);
-
-    // Verify user exists
-    const userRef = doc(db, "users", userId);
-    const userDoc = await getDoc(userRef);
-    
-    if (!userDoc.exists()) {
-      throw new Error(`User document not found: ${userId}`);
-    }
-
-    const currentUserData = userDoc.data();
-    const currentCredits = currentUserData?.credits || 0;
-
-    // Update Stripe customer metadata
-    if (subscription.customer && typeof subscription.customer === 'string') {
-      await stripe.customers.update(subscription.customer, {
-        metadata: { firebaseUserId: userId }
-      });
-    }
-
-    // Prepare initial update with free credits only
-    const updateData = {
-      planType: planConfig.planType,
-      credits: currentCredits + planConfig.freeCredits, // Only add free credits initially
-      subscriptionEndDate,
-      stripeSubscriptionId: subscription.id,
-      stripeCustomerId: subscription.customer,
-      lastCreditGrant: {
-        date: new Date(),
-        credits: planConfig.freeCredits,
-        type: 'initial',
-        planName: planConfig.name
-      },
-      creditSchedule: {
-        monthlyCredits: planConfig.monthlyCredits,
-        remainingMonths: planConfig.durationMonths,
-        lastDistribution: null
-      }
-    };
-
-    // Update user document
-    await updateUserDocument(userId, updateData);
-
-    // Schedule monthly credit distributions
-    await scheduleMonthlyCredits(
-      userId,
-      planConfig.monthlyCredits,
-      planConfig.durationMonths
-    );
-
-    // Process any distributions that are already due (e.g., for annual plans)
-    await processPendingDistributions(userId);
-
-    // Verification
-    const updatedDoc = await getDoc(userRef);
-    logEvent("SubscriptionPurchaseVerification", {
-      expected: updateData,
-      actual: updatedDoc.data()
-    });
-
-  } catch (error: any) {
-    logEvent("SubscriptionPurchaseError", {
-      error: error.message,
-      stack: error.stack,
-      userId,
-      sessionId: session.id
-    });
-    throw error;
-  }
+// Handle recurring payments
+async function handleInvoicePaid(invoice: Stripe.Invoice) {
+  // The subscription ID may be under invoice.subscription or invoice.subscription as a custom field depending on Stripe API version.
+  const subscriptionId = (invoice as any).subscription;
+  if (!subscriptionId) return;
+  
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId as string);
+  const userId = await getUserIdFromSubscription(subscription);
+  
+  // Check if monthly credits are due
+  await checkMonthlyCredits(userId);
 }
 
-async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
-  try {
-    // @ts-expect-error: Stripe.Invoice may not have 'subscription' in older types, but it exists in API response
-    if (!invoice.subscription) {
-      throw new Error("No subscription ID found on invoice object");
-    }
-
-    // @ts-expect-error: Stripe.Invoice may not have 'subscription' in older types, but it exists in API response
-    const subscription = await stripe.subscriptions.retrieve(invoice.subscription as string, {
-      expand: ['items.data.price']
-    });
-
-    const userId = await getUserIdFromSubscription(subscription);
-    await processPendingDistributions(userId);
-
-  } catch (error: any) {
-    logEvent("SubscriptionRenewalError", {
-      error: error.message,
-      stack: error.stack,
-      invoiceId: invoice.id
-    });
-    throw error;
-  }
-}
-
+// Handle subscription changes
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {
-  try {
-    const userId = await getUserIdFromSubscription(subscription);
-    const userRef = doc(db, "users", userId);
+  const userId = await getUserIdFromSubscription(subscription);
+  const userRef = doc(db, "users", userId);
 
-    // Prepare update based on subscription status
-    const updateData: any = {
-      updatedAt: Timestamp.now(),
-      lastSubscriptionStatusChange: {
-        status: subscription.status,
-        date: new Date()
-      }
-    };
-
-    if (["canceled", "unpaid", "incomplete_expired"].includes(subscription.status)) {
-      updateData.planType = "free";
-      updateData.stripeSubscriptionId = null;
-      updateData.subscriptionEndDate = null;
-      updateData.creditSchedule = null;
-      
-      // Optionally: Cancel pending distributions
-      const creditsRef = collection(db, `users/${userId}/scheduledCredits`);
-      const pendingQuery = query(creditsRef, where("status", "==", "pending"));
-      const pendingSnap = await getDocs(pendingQuery);
-      
-      const batch = writeBatch(db);
-      pendingSnap.forEach(doc => {
-        batch.update(doc.ref, { status: "canceled" });
-      });
-      await batch.commit();
-      
-    } else if (subscription.status === "active") {
-      updateData.planType = "premium";
-      updateData.stripeSubscriptionId = subscription.id;
-    }
-
-    await updateUserDocument(userId, updateData);
-
-    // Verification
-    const updatedDoc = await getDoc(userRef);
-    logEvent("SubscriptionChangeVerification", {
-      expected: updateData,
-      actual: updatedDoc.data()
+  if (["canceled", "unpaid"].includes(subscription.status)) {
+    await updateDoc(userRef, {
+      planType: "free",
+      stripeSubscriptionId: null,
+      nextCreditDate: null,
+      updatedAt: Timestamp.now()
     });
-
-  } catch (error: any) {
-    logEvent("SubscriptionChangeError", {
-      error: error.message,
-      stack: error.stack,
-      subscriptionId: subscription.id,
-      status: subscription.status
+    logEvent("SubscriptionCancelled", { userId });
+  } else if (subscription.status === "active") {
+    await updateDoc(userRef, {
+      planType: "premium",
+      stripeSubscriptionId: subscription.id,
+      updatedAt: Timestamp.now()
     });
-    throw error;
+    // Check if credits are due after reactivation
+    await checkMonthlyCredits(userId);
+    logEvent("SubscriptionReactivated", { userId });
   }
 }
