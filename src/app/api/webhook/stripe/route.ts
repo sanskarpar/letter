@@ -220,17 +220,20 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     const creditsToAdd = 25; // Initial subscription bonus credits
 
     // Calculate subscription end date
-    const subscriptionStart = new Date();
-    let subscriptionEnd = new Date(subscriptionStart);
-    subscriptionEnd.setMonth(subscriptionStart.getMonth() + planConfig.durationMonths);
+    let subscriptionStart = new Date();
+    let subscriptionEnd: Date;
 
-    // If user already has an active subscription, extend from their current end date
     if (userData.subscriptionEnd && userData.planType === "premium") {
+      // Extend from current end date if in the future, else from now
       const currentEndDate = userData.subscriptionEnd.toDate();
       if (currentEndDate > subscriptionStart) {
-        subscriptionEnd = new Date(currentEndDate);
-        subscriptionEnd.setMonth(subscriptionEnd.getMonth() + planConfig.durationMonths);
+        subscriptionStart = currentEndDate;
       }
+      subscriptionEnd = new Date(subscriptionStart);
+      subscriptionEnd.setMonth(subscriptionEnd.getMonth() + planConfig.durationMonths);
+    } else {
+      subscriptionEnd = new Date(subscriptionStart);
+      subscriptionEnd.setMonth(subscriptionEnd.getMonth() + planConfig.durationMonths);
     }
 
     transaction.update(userRef, {
@@ -238,7 +241,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       credits: currentCredits + creditsToAdd,
       stripeSubscriptionId: subscription.id,
       stripeCustomerId: subscription.customer,
-      subscriptionStart: Timestamp.fromDate(subscriptionStart),
+      subscriptionStart: Timestamp.fromDate(new Date()), // always set to now
       subscriptionEnd: Timestamp.fromDate(subscriptionEnd),
       lastMonthlyCredit: Timestamp.now(),
       creditHistory: arrayUnion({
@@ -249,14 +252,14 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       updatedAt: Timestamp.now()
     });
 
-logEvent("SubscriptionCreated", { 
-  userId: userId, 
-  plan: planConfig.name,
-  creditsAdded: creditsToAdd,
-  totalCredits: currentCredits + creditsToAdd,
-  subscriptionEnd: subscriptionEnd.toISOString(),
-  extendedExisting: userData.subscriptionEnd ? true : false
-});
+    logEvent("SubscriptionCreated", { 
+      userId: userId, 
+      plan: planConfig.name,
+      creditsAdded: creditsToAdd,
+      totalCredits: currentCredits + creditsToAdd,
+      subscriptionEnd: subscriptionEnd.toISOString(),
+      extendedExisting: userData.subscriptionEnd ? true : false
+    });
   });
 }
 
