@@ -244,7 +244,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       subscriptionStart: Timestamp.fromDate(new Date()), // always set to now
       subscriptionEndDate: Timestamp.fromDate(subscriptionEndDate),
       lastMonthlyCredit: Timestamp.now(),
-      nextCreditDate: getNextCreditDate(new Date()), // <-- set nextCreditDate to 1 month later
+      nextCreditDate: getNextCreditDate(subscriptionStart), // <-- set to 1 month after subscriptionStart
       creditHistory: arrayUnion({
         date: Timestamp.now(),
         credits: creditsToAdd,
