@@ -4,6 +4,7 @@ import { getAuth } from "firebase/auth";
 import { getFirestore, doc, getDoc, updateDoc } from "firebase/firestore";
 import { app } from "@/firebase/config";
 import { loadStripe } from "@stripe/stripe-js";
+import { useRouter } from "next/navigation";
 
 // Initialize Stripe
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
@@ -66,6 +67,7 @@ export default function PaymentsPage() {
   const auth = getAuth(app);
   const db = getFirestore(app);
   const user = auth.currentUser;
+  const router = useRouter();
 
   useEffect(() => {
     fetchUserData();
@@ -202,6 +204,15 @@ export default function PaymentsPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 p-6">
       <div className="max-w-6xl mx-auto">
+        <div className="mb-6">
+          <button
+            onClick={() => router.push("/dashboard")}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow hover:bg-blue-700 transition-colors"
+          >
+            ← Back to Dashboard
+          </button>
+        </div>
+
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
             Payments & Upgrades

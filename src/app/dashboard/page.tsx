@@ -92,17 +92,17 @@ const LetterRequestModal = ({
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-lg p-6 max-w-md w-full">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">Request Services</h3>
+            <h3 className="text-lg font-semibold text-black">Request Services</h3>
             <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
               ✕
             </button>
           </div>
           
           <div className="mb-4 p-3 bg-gray-50 rounded">
-            <p className="font-medium">Letter Details:</p>
-            <p className="text-sm text-gray-600">From: {letter.senderName}</p>
-            <p className="text-sm text-gray-600">To: {letter.receiverName}</p>
-            <p className="text-sm text-gray-600">Date: {letter.dateReceived?.toDate?.()?.toLocaleDateString() || 'N/A'}</p>
+            <p className="font-medium text-black">Letter Details:</p>
+            <p className="text-sm text-black">From: {letter.senderName}</p>
+            <p className="text-sm text-black">To: {letter.receiverName}</p>
+            <p className="text-sm text-black">Date: {letter.dateReceived?.toDate?.()?.toLocaleDateString() || 'N/A'}</p>
           </div>
 
           <form onSubmit={handleSubmit}>
@@ -115,7 +115,7 @@ const LetterRequestModal = ({
                     onChange={(e) => setPdfScan(e.target.checked)}
                     className="w-4 h-4 text-blue-600 text-black"
                   />
-                  <span className="flex-1">PDF Scan (1 credit)</span>
+                  <span className="flex-1 text-black">PDF Scan (1 credit)</span>
                   <Scan className="w-4 h-4 text-blue-600" />
                 </label>
                 
@@ -126,14 +126,14 @@ const LetterRequestModal = ({
                     onChange={(e) => setDelivery(e.target.checked)}
                     className="w-4 h-4 text-green-600 text-black"
                   />
-                  <span className="flex-1">Delivery Service (1 credit)</span>
+                  <span className="flex-1 text-black">Delivery Service (1 credit)</span>
                   <Truck className="w-4 h-4 text-green-600" />
                 </label>
               </div>
 
               {delivery && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-black mb-1">
                     Delivery Address
                   </label>
                   <textarea
@@ -149,12 +149,12 @@ const LetterRequestModal = ({
 
               <div className="bg-blue-50 p-3 rounded">
                 <div className="flex justify-between text-sm">
-                  <span>Total Credits Required:</span>
-                  <span className="font-medium">{totalCredits}</span>
+                  <span className="text-black">Total Credits Required:</span>
+                  <span className="font-medium text-black">{totalCredits}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span>Your Available Credits:</span>
-                  <span className={`font-medium ${canAfford ? 'text-green-600' : 'text-red-600'}`}>
+                  <span className="text-black">Your Available Credits:</span>
+                  <span className={`font-medium ${canAfford ? 'text-green-600' : 'text-red-600'} text-black`}>
                     {userCredits}
                   </span>
                 </div>
@@ -163,7 +163,7 @@ const LetterRequestModal = ({
               {!canAfford && (
                 <div className="bg-red-50 border border-red-200 p-3 rounded flex items-center">
                   <AlertCircle className="w-4 h-4 text-red-600 mr-2" />
-                  <span className="text-red-700 text-sm">Insufficient credits for this request</span>
+                  <span className="text-red-700 text-sm text-black">Insufficient credits for this request</span>
                 </div>
               )}
 
@@ -171,7 +171,7 @@ const LetterRequestModal = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex-1 px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 text-black border border-gray-300 rounded-md hover:bg-gray-50"
                 >
                   Cancel
                 </button>
@@ -336,7 +336,7 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
               <div className="space-y-4">
                 <div className="flex justify-between">
                   <span className="text-gray-500">Total Letters:</span>
-                  <span className="font-medium">{userLetters.length}</span>
+                  <span className="font-medium text-black">{userLetters.length}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Unscanned:</span>
@@ -372,7 +372,8 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
                     <Mail className="w-12 h-12 mx-auto mb-4 text-gray-300" />
                     <p>No letters yet. Letters will appear here once added by admin.</p>
                   </div>
-                ) : (
+                ) :
+                  (
                   <div className="divide-y divide-gray-200">
                     {userLetters.map((letter) => {
                       const status = getLetterStatus(letter);
