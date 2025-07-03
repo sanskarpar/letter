@@ -201,7 +201,9 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     throw new Error("Missing subscription or user ID in session");
   }
 
-  const subscription = await stripe.subscriptions.retrieve(session.subscription as string);
+  const subscriptionResponse = await stripe.subscriptions.retrieve(session.subscription as string);
+  // If using Stripe types, the actual subscription object is in the response itself (not wrapped)
+  const subscription = subscriptionResponse as Stripe.Subscription;
   const priceId = subscription.items.data[0].price.id;
   const planConfig = getPlanConfig(priceId);
   const userId = session.metadata.userId;
@@ -220,17 +222,17 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     const currentCredits = userData.credits || 0;
     const creditsToAdd = 25; // Initial subscription bonus credits
 
-    // Calculate subscription end date
-    const subscriptionStart = new Date();
-    let subscriptionEnd = new Date(subscriptionStart);
-    subscriptionEnd.setMonth(subscriptionStart.getMonth() + planConfig.durationMonths);
+    // Calculate subscription end date based on current period end from Stripe
+    let subscriptionEnd = new Date((subscription as any).current_period_end * 1000);
 
-    // If user already has an active subscription, extend from their current end date
+    // If user already has an active premium subscription, add the new duration to the existing end date
     if (userData.subscriptionEnd && userData.planType === "premium") {
       const currentEndDate = userData.subscriptionEnd.toDate();
-      if (currentEndDate > subscriptionStart) {
-        subscriptionEnd = new Date(currentEndDate);
-        subscriptionEnd.setMonth(subscriptionEnd.getMonth() + planConfig.durationMonths);
+      if (currentEndDate > new Date()) {
+        // Subscription is still active, extend from current end date
+        const newEndDate = new Date(currentEndDate);
+        newEndDate.setMonth(newEndDate.getMonth() + planConfig.durationMonths);
+        subscriptionEnd = newEndDate;
       }
     }
 
@@ -239,9 +241,10 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       credits: currentCredits + creditsToAdd,
       stripeSubscriptionId: subscription.id,
       stripeCustomerId: subscription.customer,
-      subscriptionStart: Timestamp.fromDate(subscriptionStart),
+      subscriptionStart: Timestamp.fromDate(new Date()),
       subscriptionEnd: Timestamp.fromDate(subscriptionEnd),
       lastMonthlyCredit: Timestamp.now(),
+      nextCreditDate: getNextCreditDate(new Date()),
       creditHistory: arrayUnion({
         date: Timestamp.now(),
         credits: creditsToAdd,
@@ -308,26 +311,29 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   const userId = await getUserIdFromSubscription(subscription);
   const userRef = doc(db, "users", userId);
 
-  if (["canceled", "unpaid"].includes(subscription.status)) {
+  if (["canceled", "unpaid", "incomplete_expired"].includes(subscription.status)) {
+    // For canceled subscriptions, we'll let it run until the paid period ends
     await updateDoc(userRef, {
-      planType: "free",
-      stripeSubscriptionId: null,
       nextCreditDate: null,
-      subscriptionEnd: null, // Clear subscription end date
       updatedAt: Timestamp.now()
     });
     logEvent("SubscriptionCancelled", { userId });
   } else if (subscription.status === "active") {
-    // Fetch the subscription to get the current period end
+    // For active subscriptions, update the end date to current_period_end
     const subscriptionEnd = new Date((subscription as any).current_period_end * 1000);
     await updateDoc(userRef, {
       planType: "premium",
       stripeSubscriptionId: subscription.id,
-      subscriptionEnd: Timestamp.fromDate(subscriptionEnd), // Update end date
+      subscriptionEnd: Timestamp.fromDate(subscriptionEnd),
       updatedAt: Timestamp.now()
     });
+    
     // Check if credits are due after reactivation
     await checkMonthlyCredits(userId);
-    logEvent("SubscriptionReactivated", { userId });
+    logEvent("SubscriptionUpdated", { 
+      userId,
+      status: subscription.status,
+      subscriptionEnd: subscriptionEnd.toISOString()
+    });
   }
 }
