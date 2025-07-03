@@ -133,17 +133,19 @@ export default function MailServiceLanding() {
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600"> Mail</span>
               <br />Again
             </h1>
-            <p className="text-xl text-gray-600 mb-8 max-w-3xl mx-auto leading-relaxed">
-              Get instant notifications when mail arrives, scan documents digitally, and forward packages anywhere. 
-              Your mail management solution for the modern world.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-              <button
-                className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-4 rounded-full text-lg font-semibold hover:shadow-lg transform hover:scale-105 transition-all duration-200"
-                onClick={() => router.push('/login')}
-              >
-                Start Free Trial
-              </button>
+            <div className="relative z-10 bg-white/90 backdrop-blur-sm rounded-2xl p-8 shadow-lg max-w-4xl mx-auto">
+              <p className="text-xl text-gray-800 mb-8 leading-relaxed font-medium">
+                Get instant notifications when mail arrives, scan documents digitally, and forward packages anywhere. 
+                Your mail management solution for the modern world.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
+                <button
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-4 rounded-full text-lg font-semibold hover:shadow-lg transform hover:scale-105 transition-all duration-200"
+                  onClick={() => router.push('/login')}
+                >
+                  Start Free Trial
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -254,69 +256,16 @@ export default function MailServiceLanding() {
           <p className="text-xl text-blue-100 mb-8 max-w-2xl mx-auto">
             Join thousands of users who never miss important mail again. Start your free trial today.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <div className="flex justify-center">
             <button
               className="bg-white text-blue-600 px-8 py-4 rounded-full font-semibold hover:bg-gray-100 transition-colors"
               onClick={() => router.push('/login')}
             >
               Start Free Trial
             </button>
-            <button
-              className="border-2 border-white text-white px-8 py-4 rounded-full font-semibold hover:bg-white hover:text-blue-600 transition-colors"
-              onClick={() => router.push('/login')}
-            >
-              Contact Sales
-            </button>
           </div>
         </div>
       </section>
-
-      {/* Footer */}
-      <footer className="bg-gray-900 text-white py-12 px-4">
-        <div className="max-w-7xl mx-auto">
-          <div className="grid md:grid-cols-4 gap-8">
-            <div>
-              <div className="flex items-center space-x-2 mb-4">
-                <Mail className="w-8 h-8 text-blue-400" />
-                <span className="text-xl font-bold">MailFlow</span>
-              </div>
-              <p className="text-gray-400">
-                The modern solution for mail management. Secure, efficient, and reliable.
-              </p>
-            </div>
-            
-            <div>
-              <h4 className="font-semibold mb-4">Product</h4>
-              <ul className="space-y-2 text-gray-400">
-                <li><a href="#" className="hover:text-white transition-colors">Features</a></li>
-                <li><a href="#" className="hover:text-white transition-colors">Pricing</a></li>
-              </ul>
-            </div>
-            
-            <div>
-              <h4 className="font-semibold mb-4">Support</h4>
-              <ul className="space-y-2 text-gray-400">
-                <li><a href="#" className="hover:text-white transition-colors">Help Center</a></li>
-                <li><a href="#" className="hover:text-white transition-colors">Contact Us</a></li>
-                <li><a href="#" className="hover:text-white transition-colors">Status</a></li>
-              </ul>
-            </div>
-            
-            <div>
-              <h4 className="font-semibold mb-4">Company</h4>
-              <ul className="space-y-2 text-gray-400">
-                <li><a href="#" className="hover:text-white transition-colors">About</a></li>
-                <li><a href="#" className="hover:text-white transition-colors">Privacy</a></li>
-                <li><a href="#" className="hover:text-white transition-colors">Terms</a></li>
-              </ul>
-            </div>
-          </div>
-          
-          <div className="border-t border-gray-800 mt-8 pt-8 text-center text-gray-400">
-            <p>&copy; 2025 MailFlow. All rights reserved.</p>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }

@@ -424,7 +424,7 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
                             <div className="flex gap-2">
                               {request?.status === "completed" && request.pdfScan && letter.adminActions?.pdfUrl && (
                                 <button
-                                  onClick={() => window.open(letter.adminActions?.pdfUrl, '_blank')}
+                                  onClick={() => setSelectedLetter(letter)} // <-- show PDF in viewer
                                   className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
                                   title="View PDF"
                                 >
