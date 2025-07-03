@@ -113,7 +113,7 @@ const LetterRequestModal = ({
                     type="checkbox"
                     checked={pdfScan}
                     onChange={(e) => setPdfScan(e.target.checked)}
-                    className="w-4 h-4 text-blue-600"
+                    className="w-4 h-4 text-blue-600 text-black"
                   />
                   <span className="flex-1">PDF Scan (1 credit)</span>
                   <Scan className="w-4 h-4 text-blue-600" />
@@ -124,7 +124,7 @@ const LetterRequestModal = ({
                     type="checkbox"
                     checked={delivery}
                     onChange={(e) => setDelivery(e.target.checked)}
-                    className="w-4 h-4 text-green-600"
+                    className="w-4 h-4 text-green-600 text-black"
                   />
                   <span className="flex-1">Delivery Service (1 credit)</span>
                   <Truck className="w-4 h-4 text-green-600" />
@@ -139,7 +139,7 @@ const LetterRequestModal = ({
                   <textarea
                     value={deliveryAddress}
                     onChange={(e) => setDeliveryAddress(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-black"
                     rows={3}
                     placeholder="Enter complete delivery address"
                     required={delivery}
