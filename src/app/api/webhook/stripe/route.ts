@@ -1,4 +1,3 @@
-// app/api/webhooks/stripe/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { 
@@ -220,19 +219,17 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     const currentCredits = userData.credits || 0;
     const creditsToAdd = 25; // Initial subscription bonus credits
 
-    // Use Stripe's current_period_end for accurate subscription end date
-    const subscriptionEnd = new Date(((subscription as any).current_period_end as number) * 1000);
+    // Calculate subscription end date
+    const subscriptionStart = new Date();
+    let subscriptionEnd = new Date(subscriptionStart);
+    subscriptionEnd.setMonth(subscriptionStart.getMonth() + planConfig.durationMonths);
 
-    // Handle extending existing subscription
-    let finalSubscriptionEnd = subscriptionEnd;
+    // If user already has an active subscription, extend from their current end date
     if (userData.subscriptionEnd && userData.planType === "premium") {
       const currentEndDate = userData.subscriptionEnd.toDate();
-      const now = new Date();
-      
-      // If current subscription is still active, extend from current end date
-      if (currentEndDate > now) {
-        finalSubscriptionEnd = new Date(currentEndDate);
-        finalSubscriptionEnd.setMonth(finalSubscriptionEnd.getMonth() + planConfig.durationMonths);
+      if (currentEndDate > subscriptionStart) {
+        subscriptionEnd = new Date(currentEndDate);
+        subscriptionEnd.setMonth(subscriptionEnd.getMonth() + planConfig.durationMonths);
       }
     }
 
@@ -241,10 +238,9 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       credits: currentCredits + creditsToAdd,
       stripeSubscriptionId: subscription.id,
       stripeCustomerId: subscription.customer,
-      subscriptionStart: Timestamp.fromDate(new Date(subscription.start_date * 1000)),
-      subscriptionEnd: Timestamp.fromDate(finalSubscriptionEnd),
+      subscriptionStart: Timestamp.fromDate(subscriptionStart),
+      subscriptionEnd: Timestamp.fromDate(subscriptionEnd),
       lastMonthlyCredit: Timestamp.now(),
-      nextCreditDate: getNextCreditDate(new Date()),
       creditHistory: arrayUnion({
         date: Timestamp.now(),
         credits: creditsToAdd,
@@ -253,16 +249,14 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       updatedAt: Timestamp.now()
     });
 
-    logEvent("SubscriptionCreated", { 
-      userId: userId, 
-      plan: planConfig.name,
-      creditsAdded: creditsToAdd,
-      totalCredits: currentCredits + creditsToAdd,
-      subscriptionStart: new Date(subscription.start_date * 1000).toISOString(),
-      subscriptionEnd: finalSubscriptionEnd.toISOString(),
-      stripeCurrentPeriodEnd: subscriptionEnd.toISOString(),
-      extendedExisting: userData.subscriptionEnd ? true : false
-    });
+logEvent("SubscriptionCreated", { 
+  userId: userId, 
+  plan: planConfig.name,
+  creditsAdded: creditsToAdd,
+  totalCredits: currentCredits + creditsToAdd,
+  subscriptionEnd: subscriptionEnd.toISOString(),
+  extendedExisting: userData.subscriptionEnd ? true : false
+});
   });
 }
 
@@ -297,30 +291,71 @@ async function handleCreditPurchase(session: Stripe.Checkout.Session) {
 
 // Handle recurring payments
 async function handleInvoicePaid(invoice: Stripe.Invoice) {
-  // @ts-expect-error: Stripe.Invoice may not have 'subscription' in older type definitions
-  const subscriptionId = invoice.subscription;
+  // The subscription ID may be under invoice.subscription or invoice.subscription as a custom field depending on Stripe API version.
+  const subscriptionId = (invoice as any).subscription;
   if (!subscriptionId) return;
   
   const subscription = await stripe.subscriptions.retrieve(subscriptionId as string);
   const userId = await getUserIdFromSubscription(subscription);
-  
-  // Update subscription end date with current period end
   const userRef = doc(db, "users", userId);
+  
+  // Get the subscription end date from Stripe
   const subscriptionEnd = new Date((subscription as any).current_period_end * 1000);
-  
-  await updateDoc(userRef, {
-    subscriptionEnd: Timestamp.fromDate(subscriptionEnd),
-    updatedAt: Timestamp.now()
-  });
 
-  logEvent("SubscriptionRenewed", { 
-    userId, 
-    subscriptionEnd: subscriptionEnd.toISOString(),
-    currentPeriodEnd: (subscription as any).current_period_end
+  // Update subscription end date and check monthly credits
+  await runTransaction(db, async (transaction) => {
+    const userDoc = await transaction.get(userRef);
+    if (!userDoc.exists()) {
+      throw new Error(`User not found: ${userId}`);
+    }
+
+    const userData = userDoc.data();
+    if (userData.planType !== "premium") return;
+
+    transaction.update(userRef, {
+      subscriptionEnd: Timestamp.fromDate(subscriptionEnd),
+      updatedAt: Timestamp.now()
+    });
+
+    logEvent("SubscriptionEndDateUpdated", {
+      userId,
+      subscriptionEnd: subscriptionEnd.toISOString()
+    });
+
+    // Check if monthly credits are due
+    const now = new Date();
+    const lastCreditDate = userData.lastMonthlyCredit?.toDate();
+    const nextCreditDate = userData.nextCreditDate?.toDate();
+
+    // If no credits have been given yet, initialize
+    if (!lastCreditDate) {
+      transaction.update(userRef, {
+        lastMonthlyCredit: Timestamp.now(),
+        nextCreditDate: getNextCreditDate(new Date())
+      });
+      return;
+    }
+
+    // Check if it's time for monthly credits
+    if (now >= (nextCreditDate || new Date(0))) {
+      transaction.update(userRef, {
+        credits: increment(MONTHLY_CREDITS),
+        lastMonthlyCredit: Timestamp.now(),
+        nextCreditDate: getNextCreditDate(now),
+        creditHistory: arrayUnion({
+          date: Timestamp.now(),
+          credits: MONTHLY_CREDITS,
+          type: "monthly"
+        })
+      });
+
+      logEvent("MonthlyCreditsAdded", { 
+        userId, 
+        creditsAdded: MONTHLY_CREDITS,
+        nextCreditDate: getNextCreditDate(now).toDate().toISOString()
+      });
+    }
   });
-  
-  // Check if monthly credits are due
-  await checkMonthlyCredits(userId);
 }
 
 // Handle subscription changes
@@ -336,23 +371,18 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       subscriptionEnd: null, // Clear subscription end date
       updatedAt: Timestamp.now()
     });
-    logEvent("SubscriptionCancelled", { userId, status: subscription.status });
+    logEvent("SubscriptionCancelled", { userId });
   } else if (subscription.status === "active") {
-    // Use Stripe's current_period_end for accurate subscription end date
+    // Fetch the subscription to get the current period end
     const subscriptionEnd = new Date((subscription as any).current_period_end * 1000);
     await updateDoc(userRef, {
       planType: "premium",
       stripeSubscriptionId: subscription.id,
-      subscriptionEnd: Timestamp.fromDate(subscriptionEnd),
+      subscriptionEnd: Timestamp.fromDate(subscriptionEnd), // Update end date
       updatedAt: Timestamp.now()
     });
-    
     // Check if credits are due after reactivation
     await checkMonthlyCredits(userId);
-    logEvent("SubscriptionReactivated", { 
-      userId, 
-      subscriptionEnd: subscriptionEnd.toISOString(),
-      currentPeriodEnd: (subscription as any).current_period_end
-    });
+    logEvent("SubscriptionReactivated", { userId });
   }
 }
