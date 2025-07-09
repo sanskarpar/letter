@@ -7,6 +7,46 @@ export default function MailServiceLanding() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const router = useRouter();
 
+  const subscriptionPlans = [
+    {
+      id: "monthly",
+      name: "Monthly Plan",
+      price: "12.99",
+      originalPrice: null,
+      savings: null,
+      duration: "month",
+      credits: 10,
+      popular: false
+    },
+    {
+      id: "semi-annual",
+      name: "Semi-Annual Plan",
+      price: "9.99",
+      originalPrice: "12.99",
+      savings: "Save 23%",
+      duration: "6 months",
+      credits: 10,
+      popular: true
+    },
+    {
+      id: "annual",
+      name: "Annual Plan",
+      price: "7.99",
+      originalPrice: "12.99",
+      savings: "Save 38%",
+      duration: "12 months",
+      credits: 10,
+      popular: false
+    }
+  ];
+
+  const creditPackages = [
+    { credits: 5, price: 1 },
+    { credits: 15, price: 2.5 },
+    { credits: 35, price: 5 },
+    { credits: 75, price: 10 }
+  ];
+
   const features = [
     {
       icon: <Mail className="w-8 h-8 text-blue-500" />,
@@ -55,26 +95,6 @@ export default function MailServiceLanding() {
       description: "View digital scans or track forwarded mail",
       icon: "✨"
     }
-  ];
-
-  const pricing = [
-    {
-      name: "Starter",
-      price: "€9.99",
-      period: "/month",
-      features: [
-        "5 free scans monthly",
-        "Unlimited incoming mail notifications",
-        "Sender name visibility on all mail",
-        "Basic mail forwarding (pay-per-use)",
-        "Email support",
-        "Scan history (30 days)",
-        "Secure document storage",
-        "Downloadable scanned PDFs"
-      ],
-      popular: false
-    }
-
   ];
 
   return (
@@ -208,41 +228,106 @@ export default function MailServiceLanding() {
       {/* Pricing Section */}
       <section id="pricing" className="py-20 px-4 bg-white">
         <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold text-gray-900 mb-4">Simple Pricing</h2>
-            <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-              Start with 5 free scans every month.
-            </p>
-          </div>
-          
-          <div className="grid md:grid-cols-1 gap-8 max-w-md mx-auto">
-            {pricing.map((plan, index) => (
-              <div key={index} className={`relative p-8 rounded-2xl border-2 ${plan.popular ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'} hover:shadow-xl transition-all duration-300`}>
-                <div className="text-center mb-8">
-                  <h3 className="text-2xl font-bold text-gray-900 mb-2">{plan.name}</h3>
-                  <div className="flex items-center justify-center">
-                    <span className="text-4xl font-bold text-gray-900">{plan.price}</span>
-                    <span className="text-gray-600 ml-2">{plan.period}</span>
-                  </div>
-                </div>
-                
-                <ul className="space-y-4 mb-8">
-                  {plan.features.map((feature, featureIndex) => (
-                    <li key={featureIndex} className="flex items-center">
-                      <CheckCircle className="w-5 h-5 text-green-500 mr-3" />
-                      <span className="text-gray-700">{feature}</span>
-                    </li>
-                  ))}
-                </ul>
-                
-                <button
-                  className={`w-full py-3 rounded-full font-semibold transition-colors ${plan.popular ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-100 text-gray-900 hover:bg-gray-200'}`}
-                  onClick={() => router.push('/login')}
+          {/* Subscription Plans */}
+          <div className="mb-12">
+            <div className="text-center mb-16">
+              <h2 className="text-4xl font-bold text-gray-900 mb-4">Choose Your Plan</h2>
+              <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+                Start with 5 free credits every month, plus bonus credits with your subscription.
+              </p>
+            </div>
+            
+            <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
+              {subscriptionPlans.map((plan) => (
+                <div
+                  key={plan.id}
+                  className={`bg-white rounded-2xl shadow-lg p-6 border-2 hover:shadow-xl transition-all duration-300 ${
+                    plan.popular ? "border-blue-500 transform scale-105" : "border-gray-200"
+                  }`}
                 >
-                  Get Started
-                </button>
+                  {plan.popular && (
+                    <div className="bg-blue-500 text-white text-sm font-bold px-3 py-1 rounded-full mb-4 text-center">
+                      MOST POPULAR
+                    </div>
+                  )}
+                  <div className="text-center mb-6">
+                    <h3 className="text-xl font-bold mb-2 text-gray-900">{plan.name}</h3>
+                    <div className="mb-2">
+                      <span className="text-3xl font-bold text-gray-900">€{plan.price}</span>
+                      <span className="text-gray-600">/month</span>
+                    </div>
+                    {plan.originalPrice && (
+                      <div className="text-sm text-gray-500">
+                        <span className="line-through">€{plan.originalPrice}/month</span>
+                        <span className="text-green-600 ml-2 font-semibold">{plan.savings}</span>
+                      </div>
+                    )}
+                    <div className="text-sm text-gray-600">Billed every {plan.duration}</div>
+                  </div>
+                  
+                  <div className="space-y-3 mb-6">
+                    <div className="flex items-center">
+                      <CheckCircle className="w-5 h-5 text-green-500 mr-3" />
+                      <span className="text-gray-700">5 free credits every month</span>
+                    </div>
+                    <div className="flex items-center">
+                      <CheckCircle className="w-5 h-5 text-green-500 mr-3" />
+                      <span className="text-gray-700">{plan.credits} bonus credits monthly</span>
+                    </div>
+                    <div className="flex items-center">
+                      <CheckCircle className="w-5 h-5 text-green-500 mr-3" />
+                      <span className="text-gray-700">Priority support</span>
+                    </div>
+                    <div className="flex items-center">
+                      <CheckCircle className="w-5 h-5 text-green-500 mr-3" />
+                      <span className="text-gray-700">Advanced features</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => router.push('/login')}
+                    className={`w-full py-3 rounded-full font-semibold transition-colors ${
+                      plan.popular
+                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                        : "bg-gray-800 text-white hover:bg-gray-900"
+                    }`}
+                  >
+                    Choose Plan
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Credit Packages */}
+          <div className="max-w-4xl mx-auto">
+            <h2 className="text-3xl font-bold text-center mb-8 text-gray-900">Buy Additional Credits</h2>
+            <div className="bg-gray-50 rounded-2xl shadow-lg p-6">
+              <div className="text-center mb-6">
+                <p className="text-gray-700">
+                  Need more credits? Purchase additional credits starting at €1 for 5 credits.
+                </p>
               </div>
-            ))}
+              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {creditPackages.map((pkg) => (
+                  <div key={pkg.credits} className="bg-white border rounded-lg p-4 text-center hover:shadow-md transition-shadow">
+                    <div className="text-2xl font-bold text-blue-600 mb-2">
+                      {pkg.credits} Credits
+                    </div>
+                    <div className="text-xl font-semibold mb-3 text-gray-900">€{pkg.price}</div>
+                    <div className="text-sm text-gray-600 mb-4">
+                      €{(pkg.price / pkg.credits).toFixed(2)} per credit
+                    </div>
+                    <button
+                      onClick={() => router.push('/login')}
+                      className="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+                    >
+                      Buy Now
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </section>

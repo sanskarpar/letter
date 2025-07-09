@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { getAuth, onAuthStateChanged } from "firebase/auth";
+import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
 import { getFirestore, doc, getDoc, collection, getDocs, query, orderBy, where, addDoc, Timestamp, updateDoc, runTransaction } from "firebase/firestore";
 import { app } from "@/firebase/config";
 import { CreditCard, Calendar, User, Package, Shield, Mail, Eye, FileText, Download, Clock, CheckCircle, Truck, Scan, AlertCircle } from 'lucide-react';
@@ -200,6 +200,7 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
   const [selectedLetter, setSelectedLetter] = useState<Letter | null>(null);
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [selectedLetterForRequest, setSelectedLetterForRequest] = useState<Letter | null>(null);
+  const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
 
   const formatDate = (date: any) => {
     if (!date) return "N/A";
@@ -246,6 +247,12 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
     return !request || request.status === "completed";
   };
 
+  const handleLogout = async () => {
+    const auth = getAuth(app);
+    await signOut(auth);
+    router.replace("/login");
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
       <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
@@ -255,7 +262,7 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
               <h2 className="text-2xl font-bold text-gray-800">Hey {userData?.name || 'there'}</h2>
               <p className="text-gray-600">Welcome to your dashboard</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 relative">
               {userData?.role === 'admin' && (
                 <button
                   onClick={() => router.push("/admin")}
@@ -265,10 +272,29 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
                   Admin
                 </button>
               )}
-              <button className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors">
-                <User className="w-5 h-5 inline-block mr-1" />
-                Account
-              </button>
+              {/* Account dropdown */}
+              <div className="relative">
+                <button
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center"
+                  onClick={() => setAccountDropdownOpen((v) => !v)}
+                >
+                  <User className="w-5 h-5 inline-block mr-1" />
+                  Account
+                  <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {accountDropdownOpen && (
+                  <div className="absolute right-0 mt-2 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                    <button
+                      onClick={handleLogout}
+                      className="block w-full text-left px-4 py-2 text-black hover:bg-gray-100 rounded-t-lg"
+                    >
+                      Logout
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           
