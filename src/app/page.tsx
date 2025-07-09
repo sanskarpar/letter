@@ -299,36 +299,8 @@ export default function MailServiceLanding() {
             </div>
           </div>
 
-          {/* Credit Packages */}
-          <div className="max-w-4xl mx-auto">
-            <h2 className="text-3xl font-bold text-center mb-8 text-gray-900">Buy Additional Credits</h2>
-            <div className="bg-gray-50 rounded-2xl shadow-lg p-6">
-              <div className="text-center mb-6">
-                <p className="text-gray-700">
-                  Need more credits? Purchase additional credits starting at €1 for 5 credits.
-                </p>
-              </div>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {creditPackages.map((pkg) => (
-                  <div key={pkg.credits} className="bg-white border rounded-lg p-4 text-center hover:shadow-md transition-shadow">
-                    <div className="text-2xl font-bold text-blue-600 mb-2">
-                      {pkg.credits} Credits
-                    </div>
-                    <div className="text-xl font-semibold mb-3 text-gray-900">€{pkg.price}</div>
-                    <div className="text-sm text-gray-600 mb-4">
-                      €{(pkg.price / pkg.credits).toFixed(2)} per credit
-                    </div>
-                    <button
-                      onClick={() => router.push('/login')}
-                      className="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
-                    >
-                      Buy Now
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+
+
         </div>
       </section>
 
