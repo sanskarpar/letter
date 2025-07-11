@@ -5,7 +5,7 @@ import { getFirestore, doc, setDoc, getDoc, collection, getDocs, Timestamp, upda
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { app } from "@/firebase/config";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, UserPlus, Shield, Mail, Users, Package, CheckCircle, Clock, FileText } from "lucide-react";
+import { ArrowLeft, UserPlus, Shield, Mail, Users, Package, CheckCircle, Clock, FileText, Truck } from "lucide-react";
 import { initializeApp as initializeAdminApp, getApps as getAdminApps } from "firebase/app";
 import { getAuth as getAdminAuth } from "firebase/auth";
 
@@ -35,6 +35,9 @@ type Letter = {
     delivered: boolean;
     pdfUrl?: string;
     completedAt?: Date;
+    trackingNumber?: string;
+    trackingCarrier?: string;
+    trackingUrl?: string;
   };
 };
 
@@ -55,8 +58,15 @@ type UserRequest = {
   adminActions?: {
     scanned?: boolean;
     delivered?: boolean;
+    trackingNumber?: string;
+    trackingCarrier?: string;
+    trackingUrl?: string;
   };
 };
+
+// (Removed duplicate state and handleMarkDelivered implementation.)
+// (Removed duplicate tracking fields UI.)
+// The correct implementation is already inside the AdminPage component below.
 
 const AdminPage = () => {
   // User creation state
@@ -85,6 +95,10 @@ const AdminPage = () => {
   const [activeTab, setActiveTab] = useState<"createUser" | "addLetter" | "manageRequests">("createUser");
   const [currentUserRole, setCurrentUserRole] = useState<string>("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [deliveryModalRequest, setDeliveryModalRequest] = useState<UserRequest | null>(null);
+  const [trackingCarrier, setTrackingCarrier] = useState("");
+  const [trackingNumber, setTrackingNumber] = useState("");
+  const [trackingUrl, setTrackingUrl] = useState("");
   
   const router = useRouter();
 
@@ -411,7 +425,22 @@ const AdminPage = () => {
     }
   };
 
-  const handleMarkDelivered = async (request: UserRequest) => {
+  const handleOpenDeliveryModal = (request: UserRequest) => {
+    setDeliveryModalRequest(request);
+    setTrackingCarrier(request.adminActions?.trackingCarrier || "");
+    setTrackingNumber(request.adminActions?.trackingNumber || "");
+    setTrackingUrl(request.adminActions?.trackingUrl || "");
+  };
+
+  const handleCloseDeliveryModal = () => {
+    setDeliveryModalRequest(null);
+    setTrackingCarrier("");
+    setTrackingNumber("");
+    setTrackingUrl("");
+  };
+
+  const handleSubmitDeliveryInfo = async (e: React.FormEvent) => {
+    e.preventDefault();
     setLoading(true);
     setError("");
     setSuccess("");
@@ -419,14 +448,20 @@ const AdminPage = () => {
     try {
       const auth = getAuth(app);
       const db = getFirestore(app);
-      
+
       if (!auth.currentUser || !isAdmin) {
         throw new Error("Unauthorized");
       }
+      if (!deliveryModalRequest) {
+        throw new Error("No request selected");
+      }
+      if (!trackingCarrier.trim() || !trackingNumber.trim()) {
+        throw new Error("Carrier and tracking number are required");
+      }
 
       // Update request status to processing if not already
-      if (request.status === "pending") {
-        await updateDoc(doc(db, "letterRequests", request.id), {
+      if (deliveryModalRequest.status === "pending") {
+        await updateDoc(doc(db, "letterRequests", deliveryModalRequest.id), {
           status: "processing",
           "adminActions.startedAt": Timestamp.now(),
           "adminActions.adminId": auth.currentUser.uid,
@@ -434,41 +469,49 @@ const AdminPage = () => {
       }
 
       // Update letter with delivery info
-      await updateDoc(doc(db, "letters", request.letterId), {
+      await updateDoc(doc(db, "letters", deliveryModalRequest.letterId), {
         "adminActions.delivered": true,
         "adminActions.deliveredAt": Timestamp.now(),
+        "adminActions.trackingCarrier": trackingCarrier.trim(),
+        "adminActions.trackingNumber": trackingNumber.trim(),
+        "adminActions.trackingUrl": trackingUrl.trim(),
         status: "processing"
       });
 
-      // Update request with delivery completion
-      await updateDoc(doc(db, "letterRequests", request.id), {
+      // Update request with delivery completion and tracking info
+      await updateDoc(doc(db, "letterRequests", deliveryModalRequest.id), {
         "adminActions.delivered": true,
+        "adminActions.trackingCarrier": trackingCarrier.trim(),
+        "adminActions.trackingNumber": trackingNumber.trim(),
+        "adminActions.trackingUrl": trackingUrl.trim(),
       });
 
       // Update the request in state
       const updatedRequest = {
-        ...request,
+        ...deliveryModalRequest,
         adminActions: {
-          ...request.adminActions,
-          delivered: true
+          ...deliveryModalRequest.adminActions,
+          delivered: true,
+          trackingCarrier: trackingCarrier.trim(),
+          trackingNumber: trackingNumber.trim(),
+          trackingUrl: trackingUrl.trim(),
         }
       };
 
       // Check if request is now complete
       const isCompleted = await checkAndCompleteRequest(updatedRequest, db);
-      
+
       if (isCompleted) {
-        setSuccess("Delivery marked and request finished!");
+        setSuccess("Delivery info saved and request finished!");
       } else {
-        setSuccess("Delivery marked successfully!");
+        setSuccess("Delivery info saved successfully!");
       }
-      
-      // Reload requests
+
+      handleCloseDeliveryModal();
       await loadPendingRequests();
-      
+
     } catch (err: any) {
-      console.error("Mark delivered error:", err);
-      setError(err.message || "Failed to mark as delivered");
+      setError(err.message || "Failed to save delivery info");
     } finally {
       setLoading(false);
     }
@@ -750,18 +793,78 @@ const AdminPage = () => {
                           )}
                           {request.delivery && !request.adminActions?.delivered && (
                             <button
-                              onClick={() => handleMarkDelivered(request)}
+                              onClick={() => handleOpenDeliveryModal(request)}
                               disabled={loading}
                               className="block w-full bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700 disabled:opacity-50"
                             >
                               <CheckCircle className="w-4 h-4 inline mr-1" />
-                              {loading ? "Processing..." : "Mark Delivered"}
+                              Enter Delivery Info
                             </button>
                           )}
                         </div>
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+              {/* Delivery Info Modal */}
+              {deliveryModalRequest && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+                  <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full">
+                    <h3 className="text-lg font-semibold mb-4 flex items-center">
+                      <Truck className="w-5 h-5 mr-2" />
+                      Delivery Information
+                    </h3>
+                    <form onSubmit={handleSubmitDeliveryInfo} className="space-y-4">
+                      <div>
+                        <label className="block text-gray-700 mb-1">Carrier</label>
+                        <input
+                          type="text"
+                          value={trackingCarrier}
+                          onChange={e => setTrackingCarrier(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-black"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-gray-700 mb-1">Tracking Number</label>
+                        <input
+                          type="text"
+                          value={trackingNumber}
+                          onChange={e => setTrackingNumber(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-black"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-gray-700 mb-1">Tracking URL (optional)</label>
+                        <input
+                          type="url"
+                          value={trackingUrl}
+                          onChange={e => setTrackingUrl(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-black"
+                          placeholder="https://tracking.example.com/..."
+                        />
+                      </div>
+                      <div className="flex gap-2 mt-4">
+                        <button
+                          type="button"
+                          onClick={handleCloseDeliveryModal}
+                          className="flex-1 px-4 py-2 border border-gray-300 rounded-md text-black hover:bg-gray-50"
+                          disabled={loading}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          className="flex-1 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                          disabled={loading}
+                        >
+                          {loading ? "Saving..." : "Save Delivery Info"}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
                 </div>
               )}
             </div>

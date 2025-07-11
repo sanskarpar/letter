@@ -24,7 +24,7 @@ export default function LoginPage() {
         body: JSON.stringify({ userId }),
       });
     } catch (error) {
-      console.error("Error checking monthly credits:", error);
+      console.error("Fehler beim Überprüfen der monatlichen Credits:", error);
     }
   };
 
@@ -37,14 +37,14 @@ export default function LoginPage() {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
       
-      // Check monthly credits after successful login
+      // Monatliche Credits nach erfolgreichem Login überprüfen
       await checkMonthlyCredits(user.uid);
       
-      // Redirect to dashboard
+      // Weiterleitung zum Dashboard
       router.push('/dashboard');
     } catch (err) {
-      setError("Failed to login. Please check your email and password.");
-      console.error("Login error:", err);
+      setError("Anmeldung fehlgeschlagen. Bitte überprüfen Sie Ihre E-Mail und Passwort.");
+      console.error("Anmeldefehler:", err);
     } finally {
       setLoading(false);
     }
@@ -53,7 +53,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
-        <h1 className="text-3xl font-bold mb-6 text-center text-black">Login to MailFlow</h1>
+        <h1 className="text-3xl font-bold mb-6 text-center text-black">Bei MailFlow anmelden</h1>
         {error && (
           <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">
             {error}
@@ -61,7 +61,7 @@ export default function LoginPage() {
         )}
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-black mb-2">Email</label>
+            <label className="block text-black mb-2">E-Mail</label>
             <input
               type="email"
               className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-black"
@@ -72,7 +72,7 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label className="block text-black mb-2">Password</label>
+            <label className="block text-black mb-2">Passwort</label>
             <input
               type="password"
               className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-black"
@@ -88,22 +88,9 @@ export default function LoginPage() {
               loading ? "opacity-70 cursor-not-allowed" : ""
             }`}
           >
-            {loading ? "Logging in..." : "Login"}
+            {loading ? "Anmeldung läuft..." : "Anmelden"}
           </button>
         </form>
-        <div className="mt-6 text-center text-black">
-          Don't have an account?{" "}
-          <a
-            href="#"
-            className="text-blue-600 hover:underline"
-            onClick={(e) => {
-              e.preventDefault();
-              router.push("/register");
-            }}
-          >
-            Register
-          </a>
-        </div>
       </div>
     </div>
   );

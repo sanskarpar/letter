@@ -19,13 +19,15 @@ type Letter = {
     delivery: boolean;
     deliveryAddress?: string;
     requestedAt: any;
-    creditsDeducted: number;
   };
   adminActions?: {
     scanned: boolean;
     delivered: boolean;
     pdfUrl?: string;
     completedAt?: any;
+    trackingNumber?: string;
+    trackingCarrier?: string;
+    trackingUrl?: string;
   };
 };
 
@@ -41,44 +43,33 @@ type UserRequest = {
   delivery: boolean;
   deliveryAddress?: string;
   requestedAt: any;
-  creditsDeducted: number;
   status: "pending" | "processing" | "completed";
 };
 
 const LetterRequestModal = ({ 
     letter, 
     onClose, 
-    onSubmit, 
-    userCredits 
+    onSubmit
   }: { 
     letter: Letter; 
     onClose: () => void; 
     onSubmit: (requests: { pdfScan: boolean; delivery: boolean; deliveryAddress?: string }) => void;
-    userCredits: number;
   }) => {
     const [pdfScan, setPdfScan] = useState(false);
     const [delivery, setDelivery] = useState(false);
     const [deliveryAddress, setDeliveryAddress] = useState("");
     
-    const totalCredits = (pdfScan ? 1 : 0) + (delivery ? 1 : 0);
-    const canAfford = userCredits >= totalCredits;
-
     const handleSubmit = (e: React.FormEvent) => {
       e.preventDefault();
       if (!pdfScan && !delivery) {
-        alert("Please select at least one service");
+        alert("Bitte wählen Sie mindestens einen Service aus");
         return;
       }
       if (delivery && !deliveryAddress.trim()) {
-        alert("Please provide a delivery address");
-        return;
-      }
-      if (!canAfford) {
-        alert("Insufficient credits");
+        alert("Bitte geben Sie eine Lieferadresse an");
         return;
       }
       
-      // Only include deliveryAddress if delivery is selected
       const requestData = {
         pdfScan,
         delivery,
@@ -92,17 +83,17 @@ const LetterRequestModal = ({
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-lg p-6 max-w-md w-full">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-black">Request Services</h3>
+            <h3 className="text-lg font-semibold text-black">Service anfordern</h3>
             <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
               ✕
             </button>
           </div>
           
           <div className="mb-4 p-3 bg-gray-50 rounded">
-            <p className="font-medium text-black">Letter Details:</p>
-            <p className="text-sm text-black">From: {letter.senderName}</p>
-            <p className="text-sm text-black">To: {letter.receiverName}</p>
-            <p className="text-sm text-black">Date: {letter.dateReceived?.toDate?.()?.toLocaleDateString() || 'N/A'}</p>
+            <p className="font-medium text-black">Briefdetails:</p>
+            <p className="text-sm text-black">Absender: {letter.senderName}</p>
+            <p className="text-sm text-black">Empfänger: {letter.receiverName}</p>
+            <p className="text-sm text-black">Datum: {letter.dateReceived?.toDate?.()?.toLocaleDateString() || 'N/A'}</p>
           </div>
 
           <form onSubmit={handleSubmit}>
@@ -115,7 +106,7 @@ const LetterRequestModal = ({
                     onChange={(e) => setPdfScan(e.target.checked)}
                     className="w-4 h-4 text-blue-600 text-black"
                   />
-                  <span className="flex-1 text-black">PDF Scan (1 credit)</span>
+                  <span className="flex-1 text-black">PDF-Scan</span>
                   <Scan className="w-4 h-4 text-blue-600" />
                 </label>
                 
@@ -126,7 +117,7 @@ const LetterRequestModal = ({
                     onChange={(e) => setDelivery(e.target.checked)}
                     className="w-4 h-4 text-green-600 text-black"
                   />
-                  <span className="flex-1 text-black">Delivery Service (1 credit)</span>
+                  <span className="flex-1 text-black">Lieferung</span>
                   <Truck className="w-4 h-4 text-green-600" />
                 </label>
               </div>
@@ -134,36 +125,16 @@ const LetterRequestModal = ({
               {delivery && (
                 <div>
                   <label className="block text-sm font-medium text-black mb-1">
-                    Delivery Address
+                    Lieferadresse
                   </label>
                   <textarea
                     value={deliveryAddress}
                     onChange={(e) => setDeliveryAddress(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-black"
                     rows={3}
-                    placeholder="Enter complete delivery address"
+                    placeholder="Geben Sie die vollständige Lieferadresse ein"
                     required={delivery}
                   />
-                </div>
-              )}
-
-              <div className="bg-blue-50 p-3 rounded">
-                <div className="flex justify-between text-sm">
-                  <span className="text-black">Total Credits Required:</span>
-                  <span className="font-medium text-black">{totalCredits}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-black">Your Available Credits:</span>
-                  <span className={`font-medium ${canAfford ? 'text-green-600' : 'text-red-600'} text-black`}>
-                    {userCredits}
-                  </span>
-                </div>
-              </div>
-
-              {!canAfford && (
-                <div className="bg-red-50 border border-red-200 p-3 rounded flex items-center">
-                  <AlertCircle className="w-4 h-4 text-red-600 mr-2" />
-                  <span className="text-red-700 text-sm text-black">Insufficient credits for this request</span>
                 </div>
               )}
 
@@ -173,14 +144,14 @@ const LetterRequestModal = ({
                   onClick={onClose}
                   className="flex-1 px-4 py-2 text-black border border-gray-300 rounded-md hover:bg-gray-50"
                 >
-                  Cancel
+                  Abbrechen
                 </button>
                 <button
                   type="submit"
-                  disabled={!canAfford || (!pdfScan && !delivery)}
+                  disabled={!pdfScan && !delivery}
                   className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Submit Request
+                  Anforderung senden
                 </button>
               </div>
             </div>
@@ -204,12 +175,11 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
 
   const formatDate = (date: any) => {
     if (!date) return "N/A";
-    // Support Firestore Timestamp or JS Date
     if (date.toDate) {
-      return date.toDate().toLocaleDateString();
+      return date.toDate().toLocaleDateString('de-DE');
     }
     if (date instanceof Date) {
-      return date.toLocaleDateString();
+      return date.toLocaleDateString('de-DE');
     }
     return "N/A";
   };
@@ -232,14 +202,14 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
     if (request) {
       switch (request.status) {
         case "pending":
-          return { text: "Request Pending", color: "bg-yellow-100 text-yellow-800", icon: Clock };
+          return { text: "Anfrage ausstehend", color: "bg-yellow-100 text-yellow-800", icon: Clock };
         case "processing":
-          return { text: "Processing", color: "bg-blue-100 text-blue-800", icon: Clock };
+          return { text: "In Bearbeitung", color: "bg-blue-100 text-blue-800", icon: Clock };
         case "completed":
-          return { text: "Completed", color: "bg-green-100 text-green-800", icon: CheckCircle };
+          return { text: "Abgeschlossen", color: "bg-green-100 text-green-800", icon: CheckCircle };
       }
     }
-    return { text: "No Request", color: "bg-gray-100 text-gray-800", icon: Mail };
+    return { text: "Keine Anfrage", color: "bg-gray-100 text-gray-800", icon: Mail };
   };
 
   const canMakeRequest = (letter: Letter) => {
@@ -253,153 +223,150 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
     router.replace("/login");
   };
 
+  const TrackingStatus = ({ letter }: { letter: Letter }) => {
+    if (!letter.adminActions?.delivered) return null;
+
+    return (
+      <div className="mt-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+        <h4 className="font-medium text-black flex items-center">
+          <Truck className="w-4 h-4 mr-2" />
+          Lieferstatus
+        </h4>
+        <div className="mt-2 space-y-1">
+          <p className="text-black">
+            <span className="font-medium">Status:</span> Geliefert
+          </p>
+          {letter.adminActions.trackingNumber && (
+            <>
+              <p className="text-black">
+                <span className="font-medium">Carrier:</span> {letter.adminActions.trackingCarrier}
+              </p>
+              <p className="text-black">
+                <span className="font-medium">Tracking-Nummer:</span> {letter.adminActions.trackingNumber}
+              </p>
+              {letter.adminActions.trackingUrl && (
+                <a 
+                  href={letter.adminActions.trackingUrl} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center text-blue-600 hover:underline text-sm"
+                >
+                  <Eye className="w-3 h-3 mr-1" />
+                  Sendung verfolgen
+                </a>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Admin-only view
+  if (userData?.role === 'admin') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
+        <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
+          <div className="bg-white shadow-md rounded-lg p-6">
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800">Admin Dashboard</h2>
+                <p className="text-gray-600">Willkommen {userData?.name || 'Admin'}</p>
+              </div>
+              <div className="flex gap-2 relative">
+                <button
+                  onClick={() => router.push("/admin")}
+                  className="bg-purple-600 text-white px-4 py-2 rounded-lg shadow-md hover:bg-purple-700 transition-colors"
+                >
+                  <Shield className="w-5 h-5 inline-block mr-1" />
+                  Admin-Bereich
+                </button>
+                
+                <div className="relative">
+                  <button
+                    className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center"
+                    onClick={() => setAccountDropdownOpen((v) => !v)}
+                  >
+                    <User className="w-5 h-5 inline-block mr-1" />
+                    Konto
+                    <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {accountDropdownOpen && (
+                    <div className="absolute right-0 mt-2 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                      <button
+                        onClick={handleLogout}
+                        className="block w-full text-left px-4 py-2 text-black hover:bg-gray-100 rounded-t-lg"
+                      >
+                        Abmelden
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <div className="text-center py-12">
+              <Shield className="w-16 h-16 mx-auto text-purple-600 mb-4" />
+              <h3 className="text-xl font-semibold text-gray-800">Admin-Konto</h3>
+              <p className="text-gray-600 mt-2">Nutzen Sie den Admin-Bereich, um Briefe und Anfragen zu verwalten</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Regular user view
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
       <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
         <div className="bg-white shadow-md rounded-lg p-6">
           <div className="flex items-center justify-between mb-8">
             <div>
-              <h2 className="text-2xl font-bold text-gray-800">Hey {userData?.name || 'there'}</h2>
-              <p className="text-gray-600">Welcome to your dashboard</p>
+              <h2 className="text-2xl font-bold text-gray-800">Hallo {userData?.name || 'Nutzer'}</h2>
+              <p className="text-gray-600">Willkommen in Ihrem Dashboard</p>
             </div>
-            <div className="flex gap-2 relative">
-              {userData?.role === 'admin' && (
-                <button
-                  onClick={() => router.push("/admin")}
-                  className="bg-purple-600 text-white px-4 py-2 rounded-lg shadow-md hover:bg-purple-700 transition-colors"
-                >
-                  <Shield className="w-5 h-5 inline-block mr-1" />
-                  Admin
-                </button>
+            <div className="relative">
+              <button
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center"
+                onClick={() => setAccountDropdownOpen((v) => !v)}
+              >
+                <User className="w-5 h-5 inline-block mr-1" />
+                Konto
+                <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {accountDropdownOpen && (
+                <div className="absolute right-0 mt-2 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                  <button
+                    onClick={handleLogout}
+                    className="block w-full text-left px-4 py-2 text-black hover:bg-gray-100 rounded-t-lg"
+                  >
+                    Abmelden
+                  </button>
+                </div>
               )}
-              {/* Account dropdown */}
-              <div className="relative">
-                <button
-                  className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center"
-                  onClick={() => setAccountDropdownOpen((v) => !v)}
-                >
-                  <User className="w-5 h-5 inline-block mr-1" />
-                  Account
-                  <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-                {accountDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
-                    <button
-                      onClick={handleLogout}
-                      className="block w-full text-left px-4 py-2 text-black hover:bg-gray-100 rounded-t-lg"
-                    >
-                      Logout
-                    </button>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="bg-blue-50 border border-blue-100 p-6 rounded-lg shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-semibold text-gray-800">Your Plan</h3>
-                <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                  userData?.planType === 'premium' 
-                    ? 'bg-blue-100 text-blue-800' 
-                    : 'bg-gray-100 text-gray-800'
-                }`}>
-                  {userData?.planType?.toUpperCase() || 'FREE'}
-                </span>
-              </div>
-              <div className="space-y-4">
-                {userData?.planType !== 'free' && (
-                  <div>
-                    <p className="text-gray-500">Subscription End Date</p>
-                    <p className="text-lg font-medium text-gray-800">
-                      {userData?.subscriptionEndDate ? formatDate(userData?.subscriptionEndDate) : "N/A"}
-                    </p>
-                  </div>
-                )}
-                <button
-                  className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors"
-                  onClick={() => router.push("/payments")}
-                >
-                  {userData?.planType === 'free' ? 'Upgrade Plan' : 'Manage Subscription'}
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-green-50 border border-green-100 p-6 rounded-lg shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-semibold text-gray-800">Your Credits</h3>
-                <Package className="w-6 h-6 text-green-600" />
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <p className="text-gray-500">Available Credits</p>
-                  <p className="text-3xl font-bold text-gray-800">
-                    {userData?.credits ?? 0}
-                  </p>
-                </div>
-                <div className="text-sm text-gray-600">
-                  <p>• PDF Scan: 1 credit</p>
-                  <p>• Delivery: 1 credit</p>
-                  <p>• Both services: 2 credits</p>
-                </div>
-                <button
-                  className="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition-colors"
-                  onClick={() => router.push("/payments")}
-                >
-                  Buy More Credits
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-orange-50 border border-orange-100 p-6 rounded-lg shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-semibold text-gray-800">Your Letters</h3>
-                <Mail className="w-6 h-6 text-orange-600" />
-              </div>
-              <div className="space-y-4">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Total Letters:</span>
-                  <span className="font-medium text-black">{userLetters.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Unscanned:</span>
-                  <span className="font-medium text-red-600">
-                    {userLetters.filter(letter => letter.status === "unscanned").length}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Completed:</span>
-                  <span className="font-medium text-green-600">
-                    {userLetters.filter(letter => letter.status === "completed").length}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Active Requests:</span>
-                  <span className="font-medium text-blue-600">
-                    {userRequests.filter(req => req.status !== "completed").length}
-                  </span>
-                </div>
-              </div>
-            </div>
-
             <div className="lg:col-span-2 bg-gray-50 border border-gray-100 rounded-lg shadow-sm">
               <div className="p-6 border-b border-gray-200">
                 <h3 className="text-xl font-semibold text-gray-800 flex items-center">
                   <Mail className="w-5 h-5 mr-2" />
-                  Your Letters
+                  Ihre Briefe
                 </h3>
               </div>
               <div className="max-h-96 overflow-y-auto">
                 {userLetters.length === 0 ? (
                   <div className="p-6 text-center text-gray-500">
                     <Mail className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                    <p>No letters yet. Letters will appear here once added by admin.</p>
+                    <p>Noch keine Briefe vorhanden. Briefe werden hier angezeigt, sobald sie vom Admin hinzugefügt wurden.</p>
                   </div>
-                ) :
-                  (
+                ) : (
                   <div className="divide-y divide-gray-200">
                     {userLetters.map((letter) => {
                       const status = getLetterStatus(letter);
@@ -408,75 +375,78 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
                       
                       return (
                         <div key={letter.id} className="p-4 hover:bg-gray-100 transition-colors">
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-start justify-between gap-4">
                             <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <h4 className="font-medium text-gray-800">
-                                  From: {letter.senderName}
-                                </h4>
-                                <span className={`px-2 py-1 text-xs rounded-full ${status.color}`}>
-                                  <StatusIcon className="w-3 h-3 inline mr-1" />
-                                  {status.text}
-                                </span>
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="font-medium text-gray-800">
+                                    Absender: {letter.senderName}
+                                  </h4>
+                                  <span className={`px-2 py-1 text-xs rounded-full ${status.color}`}>
+                                    <StatusIcon className="w-3 h-3 inline mr-1" />
+                                    {status.text}
+                                  </span>
+                                </div>
+                                <div className="flex gap-2">
+                                  {request?.status === "completed" && request.pdfScan && letter.adminActions?.pdfUrl && (
+                                    <>
+                                      <button
+                                        onClick={() => setSelectedLetter(letter)}
+                                        className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
+                                        title="PDF ansehen"
+                                      >
+                                        <Eye className="w-4 h-4" />
+                                      </button>
+                                      <a
+                                        href={letter.adminActions.pdfUrl}
+                                        download
+                                        className="p-2 text-green-600 hover:bg-green-100 rounded-lg transition-colors"
+                                        title="PDF herunterladen"
+                                      >
+                                        <Download className="w-4 h-4" />
+                                      </a>
+                                    </>
+                                  )}
+                                  {canMakeRequest(letter) && (
+                                    <button
+                                      onClick={() => handleMakeRequest(letter)}
+                                      className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
+                                    >
+                                      Service anfordern
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                               <p className="text-sm text-gray-600">
-                                To: {letter.receiverName}
+                                Empfänger: {letter.receiverName}
                               </p>
                               <p className="text-sm text-gray-500">
-                                Received: {formatDate(letter.dateReceived)}
+                                Empfangen: {formatDate(letter.dateReceived)}
                               </p>
                               
                               {request && (
                                 <div className="mt-2 text-xs text-gray-600">
-                                  <p>Services requested:</p>
+                                  <p>Angeforderte Services:</p>
                                   <div className="flex gap-2 mt-1">
                                     {request.pdfScan && (
                                       <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                                        PDF Scan
+                                        PDF-Scan
                                       </span>
                                     )}
                                     {request.delivery && (
                                       <span className="bg-green-100 text-green-800 px-2 py-1 rounded">
-                                        Delivery
+                                        Lieferung
                                       </span>
                                     )}
                                   </div>
                                   {request.deliveryAddress && (
-                                    <p className="mt-1 text-xs">Address: {request.deliveryAddress}</p>
+                                    <p className="mt-1 text-xs">Adresse: {request.deliveryAddress}</p>
                                   )}
                                 </div>
                               )}
-                            </div>
-                            
-                            <div className="flex gap-2">
-                              {request?.status === "completed" && request.pdfScan && letter.adminActions?.pdfUrl && (
-                                <button
-                                  onClick={() => setSelectedLetter(letter)} // <-- show PDF in viewer
-                                  className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
-                                  title="View PDF"
-                                >
-                                  <Eye className="w-4 h-4" />
-                                </button>
-                              )}
-                              
-                              {request?.status === "completed" && request.pdfScan && letter.adminActions?.pdfUrl && (
-                                <a
-                                  href={letter.adminActions.pdfUrl}
-                                  download
-                                  className="p-2 text-green-600 hover:bg-green-100 rounded-lg transition-colors"
-                                  title="Download PDF"
-                                >
-                                  <Download className="w-4 h-4" />
-                                </a>
-                              )}
-                              
-                              {canMakeRequest(letter) && (
-                                <button
-                                  onClick={() => handleMakeRequest(letter)}
-                                  className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
-                                >
-                                  Request Service
-                                </button>
+                              {/* Tracking status for completed delivery */}
+                              {request?.status === "completed" && request.delivery && letter.adminActions?.delivered && (
+                                <TrackingStatus letter={letter} />
                               )}
                             </div>
                           </div>
@@ -492,7 +462,7 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
               <div className="p-4 border-b border-gray-200">
                 <h3 className="text-lg font-semibold text-gray-800 flex items-center">
                   <FileText className="w-5 h-5 mr-2" />
-                  PDF Viewer
+                  PDF-Viewer
                 </h3>
               </div>
               <div className="p-4">
@@ -510,7 +480,7 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
                       <iframe
                         src={selectedLetter.adminActions.pdfUrl}
                         className="w-full h-full"
-                        title="Letter PDF"
+                        title="Brief-PDF"
                       />
                     </div>
                     <a
@@ -519,14 +489,14 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
                       className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center"
                     >
                       <Download className="w-4 h-4 mr-2" />
-                      Download PDF
+                      PDF herunterladen
                     </a>
                   </div>
                 ) : (
                   <div className="text-center text-gray-500 py-8">
                     <FileText className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                    <p>No PDF available to view</p>
-                    <p className="text-sm mt-2">Request a PDF scan for your letters</p>
+                    <p>Keine PDF zum Anzeigen verfügbar</p>
+                    <p className="text-sm mt-2">Fordern Sie einen PDF-Scan für Ihre Briefe an</p>
                   </div>
                 )}
               </div>
@@ -543,14 +513,12 @@ const MailScannerDashboard = ({ userData, userLetters, userRequests, onMakeReque
             setSelectedLetterForRequest(null);
           }}
           onSubmit={handleSubmitRequest}
-          userCredits={userData?.credits || 0}
         />
       )}
     </div>
   );
 };
 
-// Move DashboardPageInner to a separate component
 function DashboardPageInner({ user, setUserData, setSuccessMessage, setUser, setUserLetters, setUserRequests, setError, setLoading, userData, userLetters, userRequests, successMessage, loading, error }: any) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -566,46 +534,46 @@ function DashboardPageInner({ user, setUserData, setSuccessMessage, setUser, set
         setUser(firebaseUser);
         
         try {
-          // Fetch user data from Firestore
           const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
           if (userDoc.exists()) {
             setUserData(userDoc.data());
           }
 
-          // Fetch user's letters
-          const lettersQuery = query(
-            collection(db, "letters"),
-            where("userId", "==", firebaseUser.uid),
-            orderBy("dateReceived", "desc")
-          );
-          const lettersSnapshot = await getDocs(lettersQuery);
-          
-          const letters = lettersSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          })) as Letter[];
-          
-          setUserLetters(letters);
+          // Only fetch letters and requests if not admin
+          if (userDoc.data()?.role !== 'admin') {
+            const lettersQuery = query(
+              collection(db, "letters"),
+              where("userId", "==", firebaseUser.uid),
+              orderBy("dateReceived", "desc")
+            );
+            const lettersSnapshot = await getDocs(lettersQuery);
+            
+            const letters = lettersSnapshot.docs.map(doc => ({
+              id: doc.id,
+              ...doc.data()
+            })) as Letter[];
+            
+            setUserLetters(letters);
 
-          // Fetch user's requests
-          const requestsQuery = query(
-            collection(db, "letterRequests"),
-            where("userId", "==", firebaseUser.uid),
-            orderBy("requestedAt", "desc")
-          );
-          const requestsSnapshot = await getDocs(requestsQuery);
-          
-          const requests = requestsSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            requestedAt: doc.data().requestedAt?.toDate()
-          })) as UserRequest[];
-          
-          setUserRequests(requests);
+            const requestsQuery = query(
+              collection(db, "letterRequests"),
+              where("userId", "==", firebaseUser.uid),
+              orderBy("requestedAt", "desc")
+            );
+            const requestsSnapshot = await getDocs(requestsQuery);
+            
+            const requests = requestsSnapshot.docs.map(doc => ({
+              id: doc.id,
+              ...doc.data(),
+              requestedAt: doc.data().requestedAt?.toDate()
+            })) as UserRequest[];
+            
+            setUserRequests(requests);
+          }
           
           setError(null);
         } catch (error: any) {
-          console.error("Error fetching data:", error);
+          console.error("Fehler beim Laden der Daten:", error);
           setError(error.message);
         }
       }
@@ -615,72 +583,21 @@ function DashboardPageInner({ user, setUserData, setSuccessMessage, setUser, set
     return () => unsubscribe();
   }, [router]);
 
-  // Refetch user data if payment was successful (subscription or credits)
-  useEffect(() => {
-    const successType = searchParams?.get("success");
-    if (successType === "subscription" || successType === "credits") {
-      setSuccessMessage(
-        successType === "subscription"
-          ? "Subscription upgraded successfully!"
-          : "Credits purchased successfully!"
-      );
-      // Refetch user data from Firestore
-      const fetchUserData = async () => {
-        if (!user) return;
-        const db = getFirestore(app);
-        const userDoc = await getDoc(doc(db, "users", user.uid));
-        if (userDoc.exists()) {
-          setUserData(userDoc.data());
-        }
-      };
-      fetchUserData();
-      // Remove the query param from the URL after a short delay
-      setTimeout(() => {
-        setSuccessMessage(null);
-        router.replace("/dashboard");
-      }, 2500);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, user]);
-
   const handleMakeRequest = async (letterId: string, requests: { pdfScan: boolean; delivery: boolean; deliveryAddress?: string }) => {
     if (!user || !userData) return;
     
     try {
       const db = getFirestore(app);
-      const creditsNeeded = (requests.pdfScan ? 1 : 0) + (requests.delivery ? 1 : 0);
-      
-      if (userData.credits < creditsNeeded) {
-        alert("Insufficient credits");
-        return;
-      }
-
-      // Find the letter
       const letter = userLetters.find((l: Letter) => l.id === letterId);
       if (!letter) {
-        alert("Letter not found");
+        alert("Brief nicht gefunden");
         return;
       }
 
-      // Use a transaction to ensure data consistency
       await runTransaction(db, async (transaction) => {
-        // Get references
-        const userRef = doc(db, "users", user.uid);
         const letterRef = doc(db, "letters", letterId);
         const requestRef = doc(collection(db, "letterRequests"));
 
-        // Read current user data
-        const userDoc = await transaction.get(userRef);
-        if (!userDoc.exists()) {
-          throw new Error("User document not found");
-        }
-
-        const currentCredits = userDoc.data().credits || 0;
-        if (currentCredits < creditsNeeded) {
-          throw new Error("Insufficient credits");
-        }
-
-        // Create the request data
         const requestData: any = {
           letterId,
           userId: user.uid,
@@ -691,35 +608,24 @@ function DashboardPageInner({ user, setUserData, setSuccessMessage, setUser, set
           pdfScan: requests.pdfScan,
           delivery: requests.delivery,
           requestedAt: Timestamp.now(),
-          creditsDeducted: creditsNeeded,
           status: "pending"
         };
 
-        // Only add deliveryAddress if it exists
         if (requests.delivery && requests.deliveryAddress) {
           requestData.deliveryAddress = requests.deliveryAddress;
         }
 
-        // Create the letter request
         transaction.set(requestRef, requestData);
 
-        // Update user's credits
-        transaction.update(userRef, {
-          credits: currentCredits - creditsNeeded
-        });
-
-        // Update letter with user request info
         const letterUpdateData: any = {
           "userRequests": {
             pdfScan: requests.pdfScan,
             delivery: requests.delivery,
-            requestedAt: Timestamp.now(),
-            creditsDeducted: creditsNeeded
+            requestedAt: Timestamp.now()
           },
           status: "processing"
         };
 
-        // Only add deliveryAddress if it exists
         if (requests.delivery && requests.deliveryAddress) {
           letterUpdateData.userRequests.deliveryAddress = requests.deliveryAddress;
         }
@@ -727,11 +633,9 @@ function DashboardPageInner({ user, setUserData, setSuccessMessage, setUser, set
         transaction.update(letterRef, letterUpdateData);
       });
 
-      // Show success message in the page
-      setSuccessMessage("Request submitted successfully!");
+      setSuccessMessage("Anfrage erfolgreich übermittelt!");
       setTimeout(() => {
         setSuccessMessage(null);
-        // Instead of reload, refetch user data to update credits
         const fetchUserData = async () => {
           if (!user) return;
           const db = getFirestore(app);
@@ -744,8 +648,8 @@ function DashboardPageInner({ user, setUserData, setSuccessMessage, setUser, set
       }, 2000);
       
     } catch (error: any) {
-      console.error("Error making request:", error);
-      alert("Error making request: " + error.message);
+      console.error("Fehler bei der Anfrage:", error);
+      alert("Fehler bei der Anfrage: " + error.message);
     }
   };
 
@@ -754,7 +658,7 @@ function DashboardPageInner({ user, setUserData, setSuccessMessage, setUser, set
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading...</p>
+          <p className="mt-4 text-gray-600">Laden...</p>
         </div>
       </div>
     );
@@ -766,15 +670,15 @@ function DashboardPageInner({ user, setUserData, setSuccessMessage, setUser, set
         <div className="text-center">
           <div className="text-red-600 mb-4">
             <Shield className="w-12 h-12 mx-auto mb-2" />
-            <h3 className="text-lg font-semibold">Error Loading Data</h3>
-            <p className="text-sm">Unable to load your dashboard data.</p>
-            <p className="text-xs text-gray-500 mt-2">Error: {error}</p>
+            <h3 className="text-lg font-semibold">Fehler beim Laden der Daten</h3>
+            <p className="text-sm">Ihre Dashboard-Daten konnten nicht geladen werden.</p>
+            <p className="text-xs text-gray-500 mt-2">Fehler: {error}</p>
           </div>
           <button 
             onClick={() => window.location.reload()} 
             className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
           >
-            Retry
+            Erneut versuchen
           </button>
         </div>
       </div>
@@ -815,7 +719,7 @@ const DashboardPage = () => {
   const [error, setError] = useState<string | null>(null);
 
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<div>Laden...</div>}>
       <DashboardPageInner
         user={user}
         setUser={setUser}
